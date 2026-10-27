@@ -1,0 +1,3 @@
+[submodule "external/red-hat-tech-writing-style-skill"]
+	path = external/red-hat-tech-writing-style-skill
+	url = https://gitlab.com/aidalgol/red-hat-tech-writing-style-skill.git
