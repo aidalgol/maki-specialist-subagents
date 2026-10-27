@@ -1,0 +1,16 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Documents
+*.md              text diff=markdown
+
+# Source code
+*.lua             text
+
+# Configs
+.editorconfig     text
+*.toml            text
+
+# Repository metadata that does not belong in release archives
+.gitattributes  export-ignore
+.gitignore      export-ignore
