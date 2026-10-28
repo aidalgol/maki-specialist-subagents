@@ -1,0 +1,233 @@
+# specialist-subagents
+
+Specialist subagents for [maki](https://maki.sh) with delegation-workflow
+support that goes beyond "just spawn a subagent": a two-type specialist
+system, harness-enforced nested delegation, a content-addressed review
+ledger that deduplicates reviews, and budgets that make delegation trees
+safe instead of forbidden.
+
+## What it gives you
+
+| Tool / command | Audience | Purpose |
+|---|---|---|
+| `delegate` | main only | Dispatch specialists: one scalar dispatch, or a `targets` list that fans out in parallel and returns one aggregated report. |
+| `specialist_reviews` | main + subs | Read-only ledger query: which changed files already have review coverage. |
+| `/specialists` | user | Catalog, live invocations, recent coverage. |
+| prompt hint (`tool_usage`) | main | Fresh catalog plus delegation guidance, rebuilt every run. |
+
+A registered `delegate` tool is hidden from sub sessions
+(`audiences = { "main" }`); nested delegation exists only as per-invoker
+`local_tools` closures, so a sub session can never reach the orchestrator's
+tool.
+
+## Specialist definitions
+
+Definitions are Lua modules; instruction bodies are standalone markdown
+files. Both config roots are globbed, and project definitions override
+global ones by `name`:
+
+- Project: `<project>/.maki/lua/specialists/<stem>.lua`, body at
+  `<project>/.maki/specialists/<name>.md`
+- Global: `~/.config/maki/lua/specialists/<stem>.lua`, body at
+  `~/.config/maki/specialists/<name>.md`
+
+The module stem must be a valid require path (underscores); the display
+`name` may use dashes.
+
+```lua
+-- .maki/lua/specialists/scss_reviewer.lua
+return {
+  name = "scss-reviewer",             -- required, unique, [a-z0-9-]
+  type = "review",                    -- "review" | "implementation", required
+  description = "Reviews SCSS for selector hygiene, BEM compliance, and dead styles.",
+  instructions = "scss-reviewer.md",  -- default "<name>.md"; project dir, then global dir
+  model = { tier = "fast" },          -- or { spec = "..." }; tier clamps to the parent
+  thinking = "low",                   -- optional, capped at the parent setting
+  tools = { only = { "read", "index", "grep", "glob", "list", "bash" } },
+  review = { files = { "**/*.scss" } },  -- advisory: catalog + coverage-audit hints
+  -- implementation type adds:
+  -- delegate = { reviews = true, tasks = { "component-implementer" } },
+  -- max_iterations = 3,               -- fix<->re-review cap on this specialist's reviews
+  -- agents_md = false,                -- omit project instruction files from the prompt
+  -- skills = { "maki-plugin-dev" },   -- deterministic skill loading
+}
+```
+
+Invalid definitions are skipped with a warning in `maki.log`; they never
+crash the plugin.
+
+### Type defaults
+
+- **review** — read tools plus `bash` and the web tools: arbitrary commands
+  by design (ruff, stylelint, clippy, `npm run`, project linters). Safety
+  rests entirely on maki's permission machinery, never on command vetting
+  here. Strict read-only is one line away: `tools = { except = { "bash" } }`.
+- **implementation** — the full `general_sub` tool set minus interactive
+  tools, plus the nested `delegate` local tool per the `delegate` policy.
+  `batch`, `code_execution`, and `task` are always excluded (their
+  permission cost exceeds this plugin's grants).
+
+### Dispatch kinds select the envelope
+
+`kind` selects the envelope, not the specialist. `kind = "review"` always
+uses the review tool set, the review report contract, fingerprints, and the
+ledger, and records no claims — even for implementation-type targets.
+`kind = "task"` uses the implementation tool set and records claims. This is
+what lets one implementation specialist work in both roles.
+
+## Delegation model
+
+Every dispatch runs the same pipeline, whether it comes from the
+orchestrator tool or a nested local tool:
+
+1. **Policy** — cycle check (a target already in the invocation chain is
+   refused), review depth cap, and the task rules: task delegation is
+   allowed from main, or from an implementation specialist at impl-depth 0
+   whose `delegate.tasks` allowlist names the target. A specialist that was
+   itself delegated by a specialist gets **no** task-delegation capability
+   (impl chain cap 1) — enforced by which local tools the harness installs,
+   never by prompt text.
+2. **Budgets** — concurrent sessions (`max_active`), delegations per tool
+   call (`per_turn_budget`), and a fix<->re-review iteration cap per
+   (implementer, reviewer, scope). All enforced in handlers, never in
+   prompt text.
+3. **Claims** — task dispatches declare path globs; overlap with an active
+   sibling claim warns (or refuses under `strict_claims`).
+4. **Review dedup** — fingerprints are `hash(base commit ++ path ++
+   diff-or-content hash)`. Unchanged content returns the recorded verdict
+   marked `CACHED REVIEW` with no session; partial coverage reviews only the
+   unresolved subset; an identical in-flight review is joined and both
+   callers receive the same parsed result. `force_review = true` re-runs.
+5. **Spawn and report** — a self-contained brief (task, chain trace, and
+   for reviews the changed-file list plus diff text), one prompt, lenient
+   parsing of the machine-readable tail
+   (`SUMMARY:` / `FINDINGS:` / `VERDICT: approve|request-changes`).
+   Unparsable tails degrade to raw text and satisfy nothing. Ledger entries
+   are written only from parsed results, through one atomic choke point.
+6. **Fan-out** — targets run concurrently, bounded by `max_active`; the
+   report aggregates per-target sections, summed cost, and the union of
+   warnings.
+
+Review-kind reports end with a computed **coverage audit**: changed file ->
+reviewing specialist -> verdict, plus an `UNCOVERED` list of changed files
+no dispatched scope covered, each annotated with a `review.files` glob
+suggestion where one matches. Routing stays the model's judgment; the
+harness computes what was missed.
+
+## The AGENTS.md gate recipe
+
+Put this in your project's AGENTS.md (or instructions) to make the gate
+harness-backed rather than convention-backed:
+
+> Before finishing, dispatch the relevant area specialists in one `delegate`
+> `targets` call (your judgment; see `specialist_reviews` for prior
+> coverage). Completion requires the report's coverage table to show every
+> changed file passing, with no `UNCOVERED` entries — previously-reviewed
+> content returns instantly from the ledger.
+
+The gate rides both the dedup and the audit: the model chooses whom to
+invoke, and the harness computes what was missed. A final re-review of
+unchanged content is a cache hit, so the gate costs nothing the earlier
+reviews did not already spend.
+
+## Install
+
+Global config (recommended):
+
+```lua
+-- ~/.config/maki/init.lua
+maki.pack.add({
+  { src = "https://github.com/<you>/specialist-subagents" },
+})
+```
+
+or vendor the repo's `lua/`, `init.lua`, and `plugin.toml` into
+`~/.config/maki/` and `require("specialist_subagents")` from
+`~/.config/maki/init.lua`.
+
+This repository also dogfoods four specialists under `.maki/`
+(`lua-code-reviewer`, `technical-writer`, `security-engineer`,
+`test-engineer`), so working on this project with maki installed exercises
+the whole pipeline on itself.
+
+## Permissions guidance
+
+`plugin.toml` grants exactly `agent`, `fs_read`, `fs_write`, `run` — no
+`net`, no `env`. The plugin never widens anyone's authority: no
+pre-approvals, no private execution channels, zero
+`register_permission_rule`, zero `set_prompt`/`set_slot`.
+
+Sub sessions cannot answer permission prompts — a call that would prompt is
+denied. Give the specialists allow rules for what they run:
+
+- file writes by implementation specialists inside the project are
+  pre-allowed by maki's builtin `<cwd>/**` rule;
+- add project rules (`.maki/permissions.toml`) for the lint and
+  static-analysis commands your review specialists run, e.g.
+  `ruff *`, `npm run lint*`, `cargo check *`.
+
+The plugin's own process execution is a fixed git channel only
+(`status`, `diff`, `rev-parse`, `hash-object` via argv arrays); everything a
+specialist runs goes through maki's native `bash` tool and its permission
+machinery.
+
+## Configuration
+
+```lua
+-- optional, from ~/.config/maki/init.lua
+require("specialist_subagents").setup({
+  max_active = 6,          -- concurrent specialist sessions
+  per_turn_budget = 16,    -- delegations per tool call (every target counts)
+  review_max_depth = 2,    -- nested review depth cap
+  impl_chain_max = 1,      -- implementation delegation depth
+  iteration_cap = 3,       -- fix<->re-review rounds per (implementer, reviewer, scope)
+  strict_claims = false,   -- reject overlapping path claims instead of warning
+  ledger_cap = 500,        -- persisted review ledger entries per project
+})
+```
+
+The ledger persists under `~/.local/state/maki/specialists/<hash(project
+cwd)>/ledger.json`; fingerprints self-invalidate stale entries
+semantically.
+
+## Testing
+
+The pure cores (definition validation, ledger semantics, verdict parsing,
+git fingerprints, glob matching, policy checks) are unit-tested without the
+maki host:
+
+```
+cd <repo root> && lua spec/run.lua
+```
+
+The suite uses the same helper API as maki's `maki.test_helpers` and runs
+inside maki too. Live-session behaviour (dispatch, cache hits, joins,
+nested delegation) has a manual checklist:
+
+1. `/reload` in a project with specialists; check `maki.log` for definition
+   warnings.
+2. Ask the agent to run `delegate` with `specialist_reviews` first, then a
+   review fan-out; confirm parsed verdicts, token costs, and the coverage
+   table.
+3. Repeat the same review — expect `CACHED REVIEW` with zero session spend.
+4. Dispatch an implementation task to `test-engineer`; confirm it lands a
+   passing spec in `spec/` and that its local `delegate` tool offers only
+   review targets plus its allowlisted tasks.
+5. Ask a task-delegated specialist to task-delegate further — expect a
+   refusal from the harness, not from a prompt.
+6. Run two identical reviews concurrently from two calls — expect one
+   `JOINED IN-FLIGHT SESSION` result.
+
+## Known host-behaviour notes
+
+- Audience gating (`audiences = { "main" }`) hiding `delegate` from sub
+  sessions is verified against maki's documented tool-registry semantics and
+  the prompt render; verify once from a live nested session on first use.
+- If maki refuses a session because a handed-over tool's permission bank
+  exceeds the plugin's grants, the session builder retries with the
+  over-cost tools dropped and logs a warning.
+- Specialist definition modules are config code (the same trust class as
+  any project plugin). When this plugin is not installed in the same config
+  dir as the definitions, loading falls back to reading those same two
+  documented roots and compiling them — never from anywhere else, never
+  from model input.
