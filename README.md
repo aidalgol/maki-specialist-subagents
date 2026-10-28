@@ -31,41 +31,91 @@ global ones by `name`:
 - Global: `~/.config/maki/lua/specialists/<stem>.lua`, body at
   `~/.config/maki/specialists/<name>.md`
 
-The module stem must be a valid require path (underscores); the display
+The module stem (file basename) must be a valid require path (underscores); the display
 `name` may use dashes.
 
 ```lua
 -- .maki/lua/specialists/scss_reviewer.lua
+-- "scss_reviewer" is the stem.
 return {
-  name = "scss-reviewer",             -- required, unique, [a-z0-9-]
-  type = "review",                    -- "review" | "implementation", required
+  -- Required. Must be unique and contain only lower alphanumeric characters and dashes.
+  name = "scss-reviewer",
+
+  -- Required. May be "review" or "implementation".
+  type = "review",
+
+  -- Required. Brief description of the specialist's role.
   description = "Reviews SCSS for selector hygiene, BEM compliance, and dead styles.",
-  instructions = "scss-reviewer.md",  -- default "<name>.md"; project dir, then global dir
-  model = { tier = "fast" },          -- or { spec = "..." }; tier clamps to the parent
-  thinking = "low",                   -- optional, capped at the parent setting
-  tools = { only = { "read", "index", "grep", "glob", "list", "bash" } },
-  review = { files = { "**/*.scss" } },  -- advisory: catalog + coverage-audit hints
-  -- implementation type adds:
-  -- delegate = { reviews = true, tasks = { "component-implementer" } },
-  -- max_iterations = 3,               -- fix<->re-review cap on this specialist's reviews
-  -- agents_md = false,                -- omit project instruction files from the prompt
-  -- skills = { "maki-plugin-dev" },   -- deterministic skill loading
+
+  -- Optional. Name of the instructions file. Defaults to "<name>.md" if not specified.
+  instructions = "scss-reviewer.md",
+
+  -- Optional. Specifies a model tier or exact model. Defaults to parent model
+  -- if unspecified.
+  model = {
+    tier = "fast" -- Clamped to the parent's tier.
+    -- Specify tier OR spec, but NOT BOTH.
+    -- spec = "..."
+  },
+
+  -- Optional. Capped at the parent's thinking level.
+  thinking = "low",
+
+  -- Optional.
+  -- `only` and `exclude` are mutually exclusive.
+  -- Defaults differ depending on the value of `type`. See below.
+  tools = {
+    -- Explicitly specify tools available to this specialist.
+    only = { "read", "index", "grep", "glob", "list", "bash" }
+    -- Exclude certain tools from the defaults.
+    -- except = { "..." }
+  },
+
+  -- Optional. Advisory only. Indicates to the user which files to which this
+  -- specialist applies.
+  review = { files = { "**/*.scss" } },
+
+  -- Optional. Caps the fix<->re-review iterations on this specialist's reviews.
+  max_iterations = 3,
+
+  -- Optional. Omit project instruction files from the prompt.
+  agents_md = false,
+
+  -- Optional. Skills for this specialist to always load.
+  skills = { "maki-plugin-dev" },
+}
+```
+
+One additional field that is valid only when `type = "implementation"`.
+```lua
+return {
+  -- ...
+
+  delegate = {
+    -- Allow the specialist to invoke *any* reviewer specialist to review its
+    -- changes.
+    reviews = true,
+    -- Implementation specialists to which the specialist may delegate.
+    tasks = { "component-implementer" }
+  },
 }
 ```
 
 Invalid definitions are skipped with a warning in `maki.log`; they never
 crash the plugin.
 
-### Type defaults
+### Tool defaults
 
-- **review** — read tools plus `bash` and the web tools: arbitrary commands
-  by design (ruff, stylelint, clippy, `npm run`, project linters). Safety
-  rests entirely on maki's permission machinery, never on command vetting
-  here. Strict read-only is one line away: `tools = { except = { "bash" } }`.
-- **implementation** — the full `general_sub` tool set minus interactive
-  tools, plus the nested `delegate` local tool per the `delegate` policy.
-  `batch`, `code_execution`, and `task` are always excluded (their
-  permission cost exceeds this plugin's grants).
+When `type = "review"`, the specialist has read tools plus `bash` and the web
+tools: arbitrary commands by design (ruff, stylelint, clippy, `npm run`, project
+linters). Safety rests entirely on maki's permission machinery, never on command
+vetting here. Strict read-only is one line away: `tools = { except = { "bash"
+} }`.
+
+When `type = "implementation"`, the full `general_sub` tool set minus
+interactive tools, plus the nested `delegate` local tool per the `delegate`
+policy. `batch`, `code_execution`, and `task` are always excluded (their
+permission cost exceeds this plugin's grants).
 
 ### Dispatch kinds select the envelope
 
