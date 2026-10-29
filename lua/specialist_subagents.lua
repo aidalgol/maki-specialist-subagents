@@ -20,6 +20,17 @@ function M.setup(opts)
   return M
 end
 
+-- Eager discovery: a specialist definition that fails to load or validate
+-- must stop the plugin here, before any specialist work can start. maki logs
+-- the load error at startup and on /reload, and none of the registrations
+-- below run, so `delegate`, `specialist_reviews`, the prompt hint, and
+-- /specialists are all absent until the definition is fixed.
+local _, _, discovery_errors = Registry.catalog(maki.uv.cwd())
+if #discovery_errors > 0 then
+  error("specialist-subagents: broken specialist definitions:\n  - "
+    .. table.concat(discovery_errors, "\n  - "), 0)
+end
+
 local DELEGATE_SCHEMA = {
   type = "object",
   properties = {
@@ -149,9 +160,19 @@ maki.api.register_prompt_hint({
   prompt = "system",
   content = function()
     local cwd = maki.uv.cwd()
-    local catalog, warnings = Registry.catalog(cwd)
+    local catalog, warnings, errors = Registry.catalog(cwd)
     local lines = {}
     lines[#lines + 1] = "<specialist_delegation>"
+    if errors and #errors > 0 then
+      -- Unreachable while the load-time check runs first; defense in depth
+      -- against any future rescan path.
+      maki.log.error("specialist-subagents: broken specialist definitions:\n  - "
+        .. table.concat(errors, "\n  - "))
+      lines[#lines + 1] = "Specialist discovery FAILED; do not dispatch specialist work:"
+      lines[#lines + 1] = "  - " .. table.concat(errors, "\n  - ")
+      lines[#lines + 1] = "</specialist_delegation>"
+      return table.concat(lines, "\n")
+    end
     lines[#lines + 1] = "Specialists available via the delegate tool:"
     local summary = Registry.summarize(catalog)
     if summary ~= "" then

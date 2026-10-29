@@ -21,7 +21,7 @@ H.case("validate: minimal review definition passes with defaults", function()
   H.eq(#warnings, 0)
   H.eq(norm.name, "sample-reviewer")
   H.eq(norm.instructions, "sample-reviewer.md")
-  H.eq(norm.agents_md, true)
+  H.eq(norm.omit_agents_md, false)
   H.eq(norm.delegate, nil)
   H.eq(norm.review.files, {})
   H.eq(norm.skills, {})
@@ -54,10 +54,24 @@ H.case("validate: instructions default and override", function()
 end)
 
 H.case("validate: model table", function()
-  H.eq(Spec.validate(minimal({ model = { tier = "fast" } })).model.tier, "fast")
-  H.eq(Spec.validate(minimal({ model = { spec = "m/x" } })).model.spec, "m/x")
+  local norm, err, warnings = Spec.validate(minimal({ model = { tier = "fast" } }))
+  H.eq(err, nil)
+  H.eq(warnings, {})
+  H.eq(norm.model.tier, "fast")
+  norm, err, warnings = Spec.validate(minimal({ model = { spec = "m/x" } }))
+  H.eq(err, nil)
+  H.eq(warnings, {})
+  H.eq(norm.model.spec, "m/x")
   H.eq(Spec.validate(minimal({ model = {} })), nil)
   H.eq(Spec.validate(minimal({ model = "fast" })), nil)
+end)
+
+H.case("validate: model tier and spec together warns, spec wins", function()
+  local norm, err, warnings = Spec.validate(minimal({ model = { tier = "fast", spec = "x/y" } }))
+  H.eq(err, nil)
+  H.eq(norm.model, { spec = "x/y" })
+  H.eq(#warnings, 1)
+  H.has(warnings[1], "tier is ignored")
 end)
 
 H.case("validate: thinking levels", function()
@@ -116,8 +130,55 @@ H.case("validate: skills", function()
   H.eq(Spec.validate(minimal({ skills = { 1 } })), nil)
 end)
 
-H.case("validate: agents_md", function()
-  H.eq(Spec.validate(minimal({ agents_md = false })).agents_md, false)
+H.case("validate: omit_agents_md", function()
+  H.eq(Spec.validate(minimal({ omit_agents_md = true })).omit_agents_md, true)
+end)
+
+H.case("validate: unknown top-level key warns and is ignored", function()
+  local norm, err, warnings = Spec.validate(minimal({ instrucions = "typo.md" }))
+  H.eq(err, nil)
+  H.eq(norm.instructions, "sample-reviewer.md")
+  H.eq(#warnings, 1)
+  H.has(warnings[1], "unknown key")
+  H.has(warnings[1], "instrucions")
+end)
+
+H.case("validate: unknown nested tools key warns", function()
+  local norm, err, warnings = Spec.validate(minimal({ tools = { only = { "read" }, exclude = { "bash" } } }))
+  H.eq(err, nil)
+  H.eq(norm.tools.only, { "read" })
+  H.eq(#warnings, 1)
+  H.has(warnings[1], "tools.exclude")
+end)
+
+H.case("validate: stale agents_md key warns as unknown", function()
+  local norm, err, warnings = Spec.validate(minimal({ agents_md = false }))
+  H.eq(err, nil)
+  H.eq(norm.omit_agents_md, false)
+  H.eq(#warnings, 1)
+  H.has(warnings[1], "agents_md")
+end)
+
+H.case("validate: unknown key warning survives a later branch error", function()
+  local norm, err, warnings = Spec.validate(minimal({ instrucions = "typo.md", thinking = "sideways" }))
+  H.eq(norm, nil)
+  H.has(err, "thinking")
+  H.eq(#warnings, 1)
+  H.has(warnings[1], "instrucions")
+end)
+
+H.case("validate: fully valid definition has no warnings", function()
+  local _, err, warnings = Spec.validate(minimal({
+    instructions = "custom.md",
+    model = { tier = "fast" },
+    thinking = "low",
+    tools = { only = { "read" } },
+    review = { files = { "**/*.md" } },
+    max_iterations = 2,
+    skills = { "maki-plugin-dev" },
+  }))
+  H.eq(err, nil)
+  H.eq(warnings, {})
 end)
 
 H.case("iteration_cap falls back to the config default", function()

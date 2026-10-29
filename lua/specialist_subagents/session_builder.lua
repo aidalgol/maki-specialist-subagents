@@ -178,7 +178,7 @@ end
 function M.system_prompt(ctx, spec, kind, invocation, cwd)
   local base, err = maki.agent.system_prompt(ctx, {
     prompt_id = (kind == "review") and "research" or "general",
-    instructions = spec.agents_md ~= false,
+    instructions = spec.omit_agents_md ~= true,
   })
   if not base then
     return nil, err

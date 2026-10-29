@@ -16,7 +16,7 @@ end
 
 function M.render(buf, cwd, dispatch_state)
   local Registry = require("specialist_subagents.registry")
-  local catalog, warnings = Registry.catalog(cwd)
+  local catalog, warnings, errors = Registry.catalog(cwd)
 
   buf:line({ { "Specialists", { bold = true } } })
   buf:line({ { string.format("project: %s", cwd), { dim = true } } })
@@ -96,6 +96,14 @@ function M.render(buf, cwd, dispatch_state)
     end
     for _, row in ipairs(rows) do
       buf:line(row)
+    end
+  end
+
+  if errors and #errors > 0 then
+    buf:line("")
+    buf:line({ { "Definition errors", { bold = true } } })
+    for _, e in ipairs(errors) do
+      buf:line({ { "  " .. e, { dim = true } } })
     end
   end
 

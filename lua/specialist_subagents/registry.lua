@@ -32,7 +32,10 @@ local function try_require(module_name)
     return result, nil
   end
   local msg = tostring(result)
-  if msg:find("module not found", 1, true) then
+  -- Lua 5.1-5.5 say `module 'x' not found:`; maki's sandboxed require may
+  -- phrase it without the quotes. A false match is harmless: the caller
+  -- re-reads the file and reports the real error.
+  if msg:find("module not found", 1, true) or msg:match("module '[^']*' not found") then
     return nil, "not_found"
   end
   return nil, msg
@@ -76,12 +79,16 @@ local function valid_stem(stem)
   return type(stem) == "string" and stem:match("^[A-Za-z_][A-Za-z0-9_]*$") ~= nil
 end
 
--- Discover specialists for a project cwd. Returns (catalog, warnings) where
--- catalog maps name -> normalized spec with `.source` (root kind + path).
+-- Discover specialists for a project cwd. Returns (catalog, warnings, errors)
+-- where catalog maps name -> normalized spec with `.source` (root kind +
+-- path). `errors` are fatal: the plugin refuses to load while any exist.
+-- `warnings` stay non-fatal (definition warnings, duplicate names, scan
+-- failures).
 function M.discover(cwd)
   local roots = M.roots(cwd)
   local catalog = {}
   local warnings = {}
+  local errors = {}
 
   local function scan(root_kind, root, module_prefix)
     local files, err = maki.fs.glob("*.lua", { path = root, gitignore = false })
@@ -95,8 +102,8 @@ function M.discover(cwd)
     for _, path in ipairs(files) do
       local stem = path:match("([^/]+)%.lua$")
       if not valid_stem(stem) then
-        warnings[#warnings + 1] = string.format(
-          "skipping %s: module stem must be a valid require path (letters, digits, underscores)", path)
+        errors[#errors + 1] = string.format(
+          "%s: module stem must be a valid require path (letters, digits, underscores)", path)
       else
         local def, load_err
         if module_prefix then
@@ -109,14 +116,14 @@ function M.discover(cwd)
           def, load_err = load_module_file(path)
         end
         if not def then
-          warnings[#warnings + 1] = string.format("skipping %s: %s", path, tostring(load_err))
+          errors[#errors + 1] = string.format("%s: %s", path, tostring(load_err))
         else
           local norm, verr, vwarns = Spec.validate(def)
           for _, w in ipairs(vwarns or {}) do
             warnings[#warnings + 1] = path .. ": " .. w
           end
           if not norm then
-            warnings[#warnings + 1] = string.format("skipping %s: %s", path, verr)
+            errors[#errors + 1] = string.format("%s: %s", path, verr)
           else
             if catalog[norm.name] then
               warnings[#warnings + 1] = string.format(
@@ -133,20 +140,21 @@ function M.discover(cwd)
   scan("global", roots.global.lua, "specialists.")
   scan("project", roots.project.lua, "specialists.")
 
-  return catalog, warnings
+  return catalog, warnings, errors
 end
 
 -- Cached catalog; the prompt hint rebuilds it when older than the TTL.
+-- Returns (catalog, warnings, errors); see discover().
 function M.catalog(cwd, force_refresh)
   M._cache = M._cache or {}
   local cached = M._cache[cwd]
   local now = os.time()
   if force_refresh or not cached or now - cached.at > CATALOG_TTL then
-    local cat, warns = M.discover(cwd)
-    M._cache[cwd] = { at = now, catalog = cat, warnings = warns }
+    local cat, warns, errs = M.discover(cwd)
+    M._cache[cwd] = { at = now, catalog = cat, warnings = warns, errors = errs }
     cached = M._cache[cwd]
   end
-  return cached.catalog, cached.warnings
+  return cached.catalog, cached.warnings, cached.errors
 end
 
 function M.get(cwd, name)

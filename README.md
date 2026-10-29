@@ -50,12 +50,11 @@ return {
   -- Optional. Name of the instructions file. Defaults to "<name>.md" if not specified.
   instructions = "scss-reviewer.md",
 
-  -- Optional. Specifies a model tier or exact model. Defaults to parent model
-  -- if unspecified.
+  -- Optional. Specifies a model tier or exact model. Defaults to the parent
+  -- model if unspecified.
   model = {
     tier = "fast" -- Clamped to the parent's tier.
-    -- Specify tier OR spec, but NOT BOTH.
-    -- spec = "..."
+    -- spec = "..."  -- Pins one model; wins if both tier and spec are set.
   },
 
   -- Optional. Capped at the parent's thinking level.
@@ -75,13 +74,16 @@ return {
   -- specialist applies.
   review = { files = { "**/*.scss" } },
 
-  -- Optional. Caps the fix<->re-review iterations on this specialist's reviews.
+  -- Optional. Caps the fix<->re-review iterations on this specialist's
+  -- reviews. Valid for both types.
   max_iterations = 3,
 
-  -- Optional. Omit project instruction files from the prompt.
-  agents_md = false,
+  -- Optional. Omit project instruction files (AGENTS.md etc.) from the base
+  -- prompt.
+  omit_agents_md = true,
 
-  -- Optional. Skills for this specialist to always load.
+  -- Optional. Skills for this specialist to always load. Valid for both
+  -- types.
   skills = { "maki-plugin-dev" },
 }
 ```
@@ -101,8 +103,14 @@ return {
 }
 ```
 
-Invalid definitions are skipped with a warning in `maki.log`; they never
-crash the plugin.
+A definition that fails to load or validate stops the plugin from loading:
+maki logs an error that names each broken file and the reason, and none of
+the plugin's tools or commands register. Fix the definition and run
+`/reload`. Non-fatal problems (a definition warning, a duplicate name) keep
+the plugin loaded; `/specialists` lists them under "Discovery warnings".
+
+Both config roots are scanned, so a broken definition in the global
+directory disables the plugin in every project until you fix it.
 
 ### Tool defaults
 
@@ -254,8 +262,8 @@ The suite uses the same helper API as maki's `maki.test_helpers` and runs
 inside maki too. Live-session behaviour (dispatch, cache hits, joins,
 nested delegation) has a manual checklist:
 
-1. `/reload` in a project with specialists; check `maki.log` for definition
-   warnings.
+1. `/reload` in a project with specialists; check `/specialists` for
+   definition warnings.
 2. Ask the agent to run `delegate` with `specialist_reviews` first, then a
    review fan-out; confirm parsed verdicts, token costs, and the coverage
    table.
@@ -267,6 +275,11 @@ nested delegation) has a manual checklist:
    refusal from the harness, not from a prompt.
 6. Run two identical reviews concurrently from two calls — expect one
    `JOINED IN-FLIGHT SESSION` result.
+7. Break a definition (introduce a syntax error, for example), `/reload`, and
+   confirm maki logs a plugin-load error that names the file and the reason
+   while `delegate` is absent; fix the definition, `/reload`, and confirm the
+   tool registers again. A definition that only warns (a `model.tier` next to
+   a `model.spec`, or an unknown key) still loads the plugin.
 
 ## Known host-behaviour notes
 

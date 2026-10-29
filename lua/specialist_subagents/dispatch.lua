@@ -726,6 +726,15 @@ function M.handle(ctx, input, invoker)
   end
 
   local cwd = maki.uv.cwd()
+  -- Unreachable while the load-time check runs first; defense in depth
+  -- against any future rescan path.
+  local _, _, discovery_errors = Registry.catalog(cwd)
+  if #discovery_errors > 0 then
+    maki.log.error("specialist-subagents: broken specialist definitions:\n  - "
+      .. table.concat(discovery_errors, "\n  - "))
+    return "error: broken specialist definitions:\n  - "
+      .. table.concat(discovery_errors, "\n  - "), true
+  end
   local call = { cwd = cwd, used = 0 }
   local results = {}
 
