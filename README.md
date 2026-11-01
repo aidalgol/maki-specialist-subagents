@@ -133,21 +133,21 @@ ledger, and records no claims — even for implementation-type targets.
 `kind = "task"` uses the implementation tool set and records claims. This is
 what lets one implementation specialist work in both roles.
 
-`kind = "consult"` asks a specialist a question instead of giving it work.
-A consult runs the review tool set regardless of the specialist's type, has
-no review contract (no SUMMARY/FINDINGS/VERDICT tail), records nothing in
-the ledger, and is main-only — nested delegate tools never offer the kind.
-The free-form answer comes back as the report.
+Ask a specialist a question with `kind = "consult"` when you need judgement
+rather than work. The specialist answers from the review tool set regardless
+of its type, returns the free-form answer as the report, and records nothing
+in the ledger — there is no review contract (no SUMMARY/FINDINGS/VERDICT
+tail). Only main can consult: nested delegate tools never offer the kind.
 
 ### Review scope basis
 
-`scope.basis` selects what a review looks at. `"changed"` (the default)
-filters the git-changed set with `scope.files` globs; `"plan"` reviews the
-ready plan file. `"files"` resolves `scope.files` as explicit paths or globs
-against the working tree (gitignore-respecting), so a clean tree can be
-reviewed too — git status is ignored and the on-disk state is what gets
-fingerprinted. The set is capped at `review_files_cap` (50) files; entries
-matching nothing produce warnings, not failures.
+Set the review scope with `scope.basis`. Use `"changed"` (the default) to
+filter the git-changed set with `scope.files` globs, `"plan"` to review the
+ready plan file, and `"files"` to resolve `scope.files` as explicit paths or
+globs against the working tree. With `"files"`, the review reads on-disk
+state and ignores git status, so a clean tree can be reviewed too. The
+resolved set is capped at `review_files_cap` (50) files, and patterns that
+match nothing produce warnings, not failures.
 
 ## Delegation model
 
