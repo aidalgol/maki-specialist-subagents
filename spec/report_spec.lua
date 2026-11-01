@@ -1,85 +1,87 @@
 -- Verdict/finding parsing and report formatting.
 
-local H = require("helpers")
+local lu = require("luaunit")
+
+local TestReport = {}
 local Report = require("specialist_subagents.report")
 
-H.case("verdict: plain approve", function()
-  H.eq(Report.parse_verdict("notes\nVERDICT: approve"), "approve")
-end)
+function TestReport:test_verdict_plain_approve()
+  lu.assertEquals(Report.parse_verdict("notes\nVERDICT: approve"), "approve")
+end
 
-H.case("verdict: request-changes with markdown decoration", function()
-  H.eq(Report.parse_verdict("**VERDICT:** `request-changes`."), "request-changes")
-end)
+function TestReport:test_verdict_request_changes_with_markdown_decoration()
+  lu.assertEquals(Report.parse_verdict("**VERDICT:** `request-changes`."), "request-changes")
+end
 
-H.case("verdict: request changes with a space", function()
-  H.eq(Report.parse_verdict("verdict: Request Changes"), "request-changes")
-end)
+function TestReport:test_verdict_request_changes_with_a_space()
+  lu.assertEquals(Report.parse_verdict("verdict: Request Changes"), "request-changes")
+end
 
-H.case("verdict: unknown token is unparsable", function()
-  H.eq(Report.parse_verdict("VERDICT: maybe"), nil)
-  H.eq(Report.parse_verdict("VERDICT: approved-ish"), nil)
-end)
+function TestReport:test_verdict_unknown_token_is_unparsable()
+  lu.assertEquals(Report.parse_verdict("VERDICT: maybe"), nil)
+  lu.assertEquals(Report.parse_verdict("VERDICT: approved-ish"), nil)
+end
 
-H.case("verdict: absent is nil", function()
-  H.eq(Report.parse_verdict("looks fine to me"), nil)
-end)
+function TestReport:test_verdict_absent_is_nil()
+  lu.assertEquals(Report.parse_verdict("looks fine to me"), nil)
+end
 
-H.case("verdict: last mention wins", function()
-  H.eq(Report.parse_verdict("VERDICT: request-changes\n...\nVERDICT: approve"), "approve")
-end)
+function TestReport:test_verdict_last_mention_wins()
+  lu.assertEquals(Report.parse_verdict("VERDICT: request-changes\n...\nVERDICT: approve"), "approve")
+end
 
-H.case("verdict: non-string input never raises", function()
-  H.eq(Report.parse_verdict(nil), nil)
-  H.eq(Report.parse_verdict(42), nil)
-end)
+function TestReport:test_verdict_non_string_input_never_raises()
+  lu.assertEquals(Report.parse_verdict(nil), nil)
+  lu.assertEquals(Report.parse_verdict(42), nil)
+end
 
-H.case("findings: numbered block", function()
+function TestReport:test_findings_numbered_block()
   local f = Report.parse_findings("FINDINGS:\n1. first\n2. second")
-  H.eq(#f, 2)
-  H.eq(f[1], { n = 1, text = "first" })
-  H.eq(f[2], { n = 2, text = "second" })
-end)
+  lu.assertEquals(#f, 2)
+  lu.assertEquals(f[1], { n = 1, text = "first" })
+  lu.assertEquals(f[2], { n = 2, text = "second" })
+end
 
-H.case("findings: parenthesized and dashed numbers", function()
+function TestReport:test_findings_parenthesized_and_dashed_numbers()
   local f = Report.parse_findings("Findings:\n1) alpha\n- 2. beta")
-  H.eq(#f, 2)
-  H.eq(f[1].text, "alpha")
-  H.eq(f[2].text, "beta")
-end)
+  lu.assertEquals(#f, 2)
+  lu.assertEquals(f[1].text, "alpha")
+  lu.assertEquals(f[2].text, "beta")
+end
 
-H.case("findings: inline with the header", function()
+function TestReport:test_findings_inline_with_the_header()
   local f = Report.parse_findings("FINDINGS: 1. only one")
-  H.eq(#f, 1)
-  H.eq(f[1].text, "only one")
-end)
+  lu.assertEquals(#f, 1)
+  lu.assertEquals(f[1].text, "only one")
+end
 
-H.case("findings: block ends at VERDICT and blank lines", function()
+function TestReport:test_findings_block_ends_at_verdict_and_blank_lines()
   local f = Report.parse_findings("FINDINGS:\n1. one\n\nVERDICT: approve")
-  H.eq(#f, 1)
-end)
+  lu.assertEquals(#f, 1)
+end
 
-H.case("findings: none", function()
-  H.eq(#Report.parse_findings("FINDINGS:\nVERDICT: approve"), 0)
-  H.eq(#Report.parse_findings("no findings here"), 0)
-end)
+function TestReport:test_findings_none()
+  lu.assertEquals(#Report.parse_findings("FINDINGS:\nVERDICT: approve"), 0)
+  lu.assertEquals(#Report.parse_findings("no findings here"), 0)
+end
 
-H.case("summary: inline", function()
-  H.eq(Report.parse_summary("SUMMARY: all good\nVERDICT: approve"), "all good")
-end)
+function TestReport:test_summary_inline()
+  lu.assertEquals(Report.parse_summary("SUMMARY: all good\nVERDICT: approve"), "all good")
+end
 
-H.case("summary: continues across lines until a blank", function()
-  H.eq(Report.parse_summary("Summary:\nfirst part\nsecond part\n\nFINDINGS:"), "first part second part")
-end)
+function TestReport:test_summary_continues_across_lines_until_a_blank()
+  lu.assertEquals(Report.parse_summary("Summary:\nfirst part\nsecond part\n\nFINDINGS:"), "first part second part")
+end
 
-H.case("summary: markdown stripped", function()
-  H.eq(Report.parse_summary("**SUMMARY:** **bold** claim"), "bold claim")
-end)
+function TestReport:test_summary_markdown_stripped()
+  lu.assertEquals(Report.parse_summary("**SUMMARY:** **bold** claim"), "bold claim")
+end
 
-H.case("summary: absent", function()
-  H.eq(Report.parse_summary("nothing"), nil)
-end)
+function TestReport:test_summary_absent()
+  lu.assertEquals(Report.parse_summary("nothing"), nil)
+end
 
-H.case("parse_review: full tail", function()
+function TestReport:test_parse_review_full_tail()
   local p = Report.parse_review(table.concat({
     "## Review",
     "The change looks mostly fine.",
@@ -90,42 +92,42 @@ H.case("parse_review: full tail", function()
     "2. session not closed on error path",
     "VERDICT: request-changes",
   }, "\n"))
-  H.eq(p.known, true)
-  H.eq(p.verdict, "request-changes")
-  H.eq(#p.findings, 2)
-  H.eq(p.summary, "one issue with the guard")
-end)
+  lu.assertEquals(p.known, true)
+  lu.assertEquals(p.verdict, "request-changes")
+  lu.assertEquals(#p.findings, 2)
+  lu.assertEquals(p.summary, "one issue with the guard")
+end
 
-H.case("parse_review: garbage degrades to raw", function()
+function TestReport:test_parse_review_garbage_degrades_to_raw()
   local p = Report.parse_review("this model ignored the contract entirely")
-  H.eq(p.known, false)
-  H.eq(p.verdict, nil)
-  H.eq(p.raw, "this model ignored the contract entirely")
-end)
+  lu.assertEquals(p.known, false)
+  lu.assertEquals(p.verdict, nil)
+  lu.assertEquals(p.raw, "this model ignored the contract entirely")
+end
 
-H.case("format_target: review section carries verdict and flags", function()
+function TestReport:test_format_target_review_section_carries_verdict_and_flags()
   local text = Report.format_target({
     specialist = "scss-reviewer", kind = "review", status = "done",
     verdict = "approve", cached = true,
     scope_files = { "a.scss" }, chain = {}, warnings = {},
     tokens = { input = 1200, output = 300 }, duration_ms = 45000,
   })
-  H.has(text, "scss-reviewer (review) -- approve [CACHED REVIEW]")
-  H.has(text, "Files: a.scss")
-  H.has(text, "1.2k in / 0.3k out")
-  H.has(text, "Chain: main")
-end)
+  lu.assertStrContains(text, "scss-reviewer (review) -- approve [CACHED REVIEW]")
+  lu.assertStrContains(text, "Files: a.scss")
+  lu.assertStrContains(text, "1.2k in / 0.3k out")
+  lu.assertStrContains(text, "Chain: main")
+end
 
-H.case("format_target: unparsable review surfaces raw text", function()
+function TestReport:test_format_target_unparsable_review_surfaces_raw_text()
   local text = Report.format_target({
     specialist = "r", kind = "review", status = "done",
     scope_files = {}, chain = {}, warnings = {}, raw = "no tail at all",
   })
-  H.has(text, "unparsed verdict")
-  H.has(text, "no tail at all")
-end)
+  lu.assertStrContains(text, "unparsed verdict")
+  lu.assertStrContains(text, "no tail at all")
+end
 
-H.case("format_aggregate: counts, totals, warning dedup", function()
+function TestReport:test_format_aggregate_counts_totals_warning_dedup()
   local text = Report.format_aggregate({
     { specialist = "a", kind = "review", status = "done", verdict = "approve",
       tokens = { input = 100, output = 50 }, duration_ms = 1000, warnings = { "w1" } },
@@ -133,40 +135,42 @@ H.case("format_aggregate: counts, totals, warning dedup", function()
       tokens = { input = 200, output = 100 }, duration_ms = 2500, warnings = { "w1", "w2" } },
     { specialist = "c", kind = "task", status = "refused", error = "nope", warnings = {} },
   })
-  H.has(text, "3 target(s), 2 completed, 1 not completed")
-  H.has(text, "0.3k in / 0.1k out")
-  H.has(text, "Warnings (2):")
-  H.has(text, "w2")
-end)
+  lu.assertStrContains(text, "3 target(s), 2 completed, 1 not completed")
+  lu.assertStrContains(text, "0.3k in / 0.1k out")
+  lu.assertStrContains(text, "Warnings (2):")
+  lu.assertStrContains(text, "w2")
+end
 
-H.case("format_coverage: table and UNCOVERED suggestions", function()
+function TestReport:test_format_coverage_table_and_uncovered_suggestions()
   local text = Report.format_coverage({
     { path = "a.scss", specialist = "scss-reviewer", verdict = "approve", cached = true },
   }, {
     { path = "src/x.lua", suggestion = { specialist = "lua-code-reviewer", glob = "lua/**/*.lua" } },
   })
-  H.has(text, "Review coverage:")
-  H.has(text, "a.scss")
-  H.has(text, "approve (CACHED)")
-  H.has(text, "UNCOVERED")
-  H.has(text, "src/x.lua")
-  H.has(text, "suggested: lua-code-reviewer")
-end)
+  lu.assertStrContains(text, "Review coverage:")
+  lu.assertStrContains(text, "a.scss")
+  lu.assertStrContains(text, "approve (CACHED)")
+  lu.assertStrContains(text, "UNCOVERED")
+  lu.assertStrContains(text, "src/x.lua")
+  lu.assertStrContains(text, "suggested: lua-code-reviewer")
+end
 
-H.case("format_coverage: empty input is empty", function()
-  H.eq(Report.format_coverage(nil, nil), "")
-end)
+function TestReport:test_format_coverage_empty_input_is_empty()
+  lu.assertEquals(Report.format_coverage(nil, nil), "")
+end
 
-H.case("format_aggregate: consult result renders without review machinery", function()
+function TestReport:test_format_aggregate_consult_result_renders_without_review_machinery()
   local long = string.rep("advice ", 800) -- well past any line length, under the 4000 cap
   local text = Report.format_aggregate({
     { specialist = "technical-writer", kind = "consult", status = "done",
       summary = long:sub(1, 4000), raw = long, chain = {}, warnings = {},
       tokens = { input = 900, output = 700 }, duration_ms = 12000 },
   })
-  H.has(text, "1 target(s), 1 completed, 0 not completed")
-  H.has(text, "technical-writer (consult) -- done")
-  H.has(text, "Summary: advice")
-  H.eq(text:find("VERDICT", 1, true), nil, "no review machinery")
-  H.eq(text:find("UNCOVERED", 1, true), nil, "no coverage audit for consults")
-end)
+  lu.assertStrContains(text, "1 target(s), 1 completed, 0 not completed")
+  lu.assertStrContains(text, "technical-writer (consult) -- done")
+  lu.assertStrContains(text, "Summary: advice")
+  lu.assertEquals(text:find("VERDICT", 1, true), nil, "no review machinery")
+  lu.assertEquals(text:find("UNCOVERED", 1, true), nil, "no coverage audit for consults")
+end
+
+return TestReport

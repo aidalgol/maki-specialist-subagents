@@ -1,3 +1,6 @@
 [submodule "external/red-hat-tech-writing-style-skill"]
 	path = external/red-hat-tech-writing-style-skill
 	url = https://gitlab.com/aidalgol/red-hat-tech-writing-style-skill.git
+[submodule "external/luaunit"]
+	path = external/luaunit
+	url = https://github.com/bluebird75/luaunit.git

@@ -6,7 +6,7 @@
 return {
   name = "test-engineer",
   type = "implementation",
-  description = "Authors unit tests for the pure cores in spec/, runnable with the luau CLI.",
+  description = "Authors the LuaUnit unit tests for the pure cores in spec/, run from the repo root with `lua spec/run.lua`.",
   instructions = "test-engineer.md",
   model = { tier = "medium" },
   thinking = "medium",

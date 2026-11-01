@@ -1,7 +1,9 @@
 -- Dispatch pure surface: input normalization and the policy engine
 -- (cycle checks, depth caps, task allowlists, impl chain cap).
 
-local H = require("helpers")
+local lu = require("luaunit")
+
+local TestDispatch = {}
 local Dispatch = require("specialist_subagents.dispatch")
 
 local function ok_policy(target, spec, invoker)
@@ -12,19 +14,19 @@ end
 local review_spec = { name = "scss-reviewer", type = "review" }
 local impl_spec = { name = "test-engineer", type = "implementation" }
 
-H.case("normalize_input: scalar form gets defaults", function()
+function TestDispatch:test_normalize_input_scalar_form_gets_defaults()
   local targets, err = Dispatch.normalize_input({ specialist = "r", brief = "do it" })
-  H.eq(err, nil)
-  H.eq(#targets, 1)
-  H.eq(targets[1].specialist, "r")
-  H.eq(targets[1].kind, nil, "kind inferred later from the specialist type")
-  H.eq(targets[1].scope.basis, "changed")
-  H.eq(targets[1].scope.files, {})
-  H.eq(targets[1].claims, {})
-  H.eq(targets[1].force_review, false)
-end)
+  lu.assertEquals(err, nil)
+  lu.assertEquals(#targets, 1)
+  lu.assertEquals(targets[1].specialist, "r")
+  lu.assertEquals(targets[1].kind, nil, "kind inferred later from the specialist type")
+  lu.assertEquals(targets[1].scope.basis, "changed")
+  lu.assertEquals(targets[1].scope.files, {})
+  lu.assertEquals(targets[1].claims, {})
+  lu.assertEquals(targets[1].force_review, false)
+end
 
-H.case("normalize_input: targets list form", function()
+function TestDispatch:test_normalize_input_targets_list_form()
   local targets = Dispatch.normalize_input({
     targets = {
       { specialist = "a", brief = "x" },
@@ -32,88 +34,88 @@ H.case("normalize_input: targets list form", function()
         scope = { files = { "**/*.lua" }, basis = "plan" }, claims = { "src/**" } },
     },
   })
-  H.eq(#targets, 2)
-  H.eq(targets[2].kind, "review")
-  H.eq(targets[2].scope.basis, "plan")
-  H.eq(targets[2].claims, { "src/**" })
-end)
+  lu.assertEquals(#targets, 2)
+  lu.assertEquals(targets[2].kind, "review")
+  lu.assertEquals(targets[2].scope.basis, "plan")
+  lu.assertEquals(targets[2].claims, { "src/**" })
+end
 
-H.case("normalize_input: rejects malformed input", function()
-  H.eq(Dispatch.normalize_input({ specialist = "r" }), nil, "brief required")
-  H.eq(Dispatch.normalize_input({ brief = "x" }), nil, "specialist required")
-  H.eq(Dispatch.normalize_input({ targets = {} }), nil, "empty fan-out")
-  H.eq(Dispatch.normalize_input("nope"), nil)
-  H.eq(Dispatch.normalize_input({ targets = { { specialist = "a" } } }), nil)
-end)
+function TestDispatch:test_normalize_input_rejects_malformed_input()
+  lu.assertEquals(Dispatch.normalize_input({ specialist = "r" }), nil, "brief required")
+  lu.assertEquals(Dispatch.normalize_input({ brief = "x" }), nil, "specialist required")
+  lu.assertEquals(Dispatch.normalize_input({ targets = {} }), nil, "empty fan-out")
+  lu.assertEquals(Dispatch.normalize_input("nope"), nil)
+  lu.assertEquals(Dispatch.normalize_input({ targets = { { specialist = "a" } } }), nil)
+end
 
-H.case("policy: main can dispatch anything", function()
+function TestDispatch:test_policy_main_can_dispatch_anything()
   local main = { name = "main", chain = {} }
-  H.truthy(ok_policy({ specialist = "scss-reviewer", brief = "b" }, review_spec, main))
-  H.truthy(ok_policy({ specialist = "test-engineer", brief = "b" }, impl_spec, main))
-end)
+  lu.assertTrue(ok_policy({ specialist = "scss-reviewer", brief = "b" }, review_spec, main))
+  lu.assertTrue(ok_policy({ specialist = "test-engineer", brief = "b" }, impl_spec, main))
+end
 
-H.case("policy: cycle through the chain is refused", function()
+function TestDispatch:test_policy_cycle_through_the_chain_is_refused()
   local invoker = {
     name = "impl",
     chain = { { name = "test-engineer", kind = "task" } },
   }
   local ok, err = ok_policy({ specialist = "test-engineer", brief = "b" }, impl_spec, invoker)
-  H.eq(ok, false)
-  H.has(err, "cycle")
-end)
+  lu.assertEquals(ok, false)
+  lu.assertStrContains(err, "cycle")
+end
 
-H.case("policy: self-delegation is refused", function()
+function TestDispatch:test_policy_self_delegation_is_refused()
   local ok, err = ok_policy(
     { specialist = "test-engineer", brief = "b" }, impl_spec,
     { name = "test-engineer", chain = {} })
-  H.eq(ok, false)
-  H.has(err, "cycle")
-end)
+  lu.assertEquals(ok, false)
+  lu.assertStrContains(err, "cycle")
+end
 
-H.case("policy: review depth cap", function()
+function TestDispatch:test_policy_review_depth_cap()
   local deep = {
     name = "reviewer",
     chain = { { name = "a", kind = "task" }, { name = "b", kind = "review" } },
   }
   local ok, err = ok_policy({ specialist = "scss-reviewer", brief = "b" }, review_spec, deep)
-  H.eq(ok, false)
-  H.has(err, "depth")
+  lu.assertEquals(ok, false)
+  lu.assertStrContains(err, "depth")
   -- depth 2 (one ancestor hop) is allowed
   local mid = { name = "impl", chain = { { name = "a", kind = "task" } } }
-  H.truthy(ok_policy({ specialist = "scss-reviewer", brief = "b" }, review_spec, mid))
-end)
+  lu.assertTrue(ok_policy({ specialist = "scss-reviewer", brief = "b" }, review_spec, mid))
+end
 
-H.case("policy: task delegation needs the allowlist", function()
+function TestDispatch:test_policy_task_delegation_needs_the_allowlist()
   local invoker = { name = "test-engineer", chain = {} }
   local target = { specialist = "component-implementer", brief = "b" }
   local ok, err = ok_policy(target, impl_spec, invoker)
-  H.eq(ok, false)
-  H.has(err, "allowlist")
+  lu.assertEquals(ok, false)
+  lu.assertStrContains(err, "allowlist")
   local with_allow = { name = "test-engineer", chain = {}, delegate = { tasks = { "component-implementer" } } }
-  H.truthy(ok_policy(target, impl_spec, with_allow))
-end)
+  lu.assertTrue(ok_policy(target, impl_spec, with_allow))
+end
 
-H.case("policy: impl chain cap - task-delegated specialists cannot task-delegate", function()
+function TestDispatch:test_policy_impl_chain_cap_task_delegated_specialists_cannot_task_delegate()
   local nested = {
     name = "impl",
     chain = { { name = "test-engineer", kind = "task" } },
     delegate = { tasks = { "anything" } },
   }
   local ok, err = ok_policy({ specialist = "anything", brief = "b" }, impl_spec, nested)
-  H.eq(ok, false)
-  H.has(err, "impl chain cap")
+  lu.assertEquals(ok, false)
+  lu.assertStrContains(err, "impl chain cap")
   -- review delegation still works from the same invoker (depth 2)
-  H.truthy(ok_policy({ specialist = "scss-reviewer", brief = "b" }, review_spec, nested))
-end)
+  lu.assertTrue(ok_policy({ specialist = "scss-reviewer", brief = "b" }, review_spec, nested))
+end
 
-H.case("policy: an implementer's own hop does not block its task delegation", function()
+function TestDispatch:test_policy_an_implementer_s_own_hop_does_not_block_its_task_delegation()
   -- real shape: the child invoker's chain ends with its own dispatch hop
   local child = {
     name = "test-engineer",
     chain = { { name = "test-engineer", kind = "task" } },
     delegate = { tasks = { "component-implementer" } },
   }
-  H.truthy(ok_policy({ specialist = "component-implementer", brief = "b" }, impl_spec, child),
+  lu.assertTrue(ok_policy({ specialist = "component-implementer", brief = "b" }, impl_spec, child),
     "impl-depth 0 implementer task-delegates its allowlisted target")
   -- a specialist that was itself delegated by a specialist cannot
   local grandchild = {
@@ -125,30 +127,30 @@ H.case("policy: an implementer's own hop does not block its task delegation", fu
     delegate = { tasks = { "anything" } },
   }
   local ok, err = ok_policy({ specialist = "anything", brief = "b" }, impl_spec, grandchild)
-  H.eq(ok, false)
-  H.has(err, "impl chain cap")
-end)
+  lu.assertEquals(ok, false)
+  lu.assertStrContains(err, "impl chain cap")
+end
 
-H.case("policy: kind defaults follow the specialist type", function()
+function TestDispatch:test_policy_kind_defaults_follow_the_specialist_type()
   local main = { name = "main", chain = {} }
   local kind = Dispatch.check_policy({ specialist = "x", brief = "b" }, review_spec, main)
-  H.eq(kind, "review")
+  lu.assertEquals(kind, "review")
   kind = Dispatch.check_policy({ specialist = "x", brief = "b" }, impl_spec, main)
-  H.eq(kind, "task")
+  lu.assertEquals(kind, "task")
   kind = Dispatch.check_policy({ specialist = "x", brief = "b", kind = "review" }, impl_spec, main)
-  H.eq(kind, "review", "explicit kind overrides the type default")
-end)
+  lu.assertEquals(kind, "review", "explicit kind overrides the type default")
+end
 
 -- Regression: the recent-finished handoff lives on the plugin-lifetime
 -- State, not on the per-project ledger state (which has no finished table).
 -- The wrong-table version crashed every completing review with
 -- "attempt to index nil with string" at store_finished.
-H.case("finished handoff: stored on State, bounded at MAX_FINISHED", function()
+function TestDispatch:test_finished_handoff_stored_on_state_bounded_at_max_finished()
   Dispatch._store_finished("handoff-regression", { status = "done", verdict = "approve" })
   local fin = Dispatch._state.finished["handoff-regression"]
-  H.truthy(fin ~= nil, "handoff stored on State.finished")
-  H.eq(fin.result.verdict, "approve")
-  H.eq(type(fin.at), "number")
+  lu.assertTrue(fin ~= nil, "handoff stored on State.finished")
+  lu.assertEquals(fin.result.verdict, "approve")
+  lu.assertEquals(type(fin.at), "number")
   for i = 1, 60 do
     Dispatch._store_finished("bound-" .. i, { status = "done" })
   end
@@ -156,17 +158,17 @@ H.case("finished handoff: stored on State, bounded at MAX_FINISHED", function()
   for _ in pairs(Dispatch._state.finished) do
     n = n + 1
   end
-  H.truthy(n <= 50, "handoff bounded (got " .. n .. ")")
+  lu.assertTrue(n <= 50, "handoff bounded (got " .. n .. ")")
   -- cleanup: leave no bound-* entries for later cases
   for k in pairs(Dispatch._state.finished) do
     Dispatch._state.finished[k] = nil
   end
-end)
+end
 
 -- Regression: an unparsable review satisfies nothing, the review cache
 -- included. combined_verdict defaults to "approve", so a verdict-less
 -- cached entry would approve unchanged files without any review running.
-H.case("review cache: verdict-less ledger entries are cache misses", function()
+function TestDispatch:test_review_cache_verdict_less_ledger_entries_are_cache_misses()
   local Ledger = require("specialist_subagents.ledger")
   local state = Ledger.new_state()
   Ledger.record(state, {
@@ -185,14 +187,14 @@ H.case("review cache: verdict-less ledger entries are cache misses", function()
   local spec = { name = "r" }
 
   local files, cached = Dispatch._resolve_review_files(state, target, spec, snap, false)
-  H.eq(#files, 2, "both scoped files resolved")
-  H.eq(#cached, 1, "only the verdict-bearing entry is cached")
+  lu.assertEquals(#files, 2, "both scoped files resolved")
+  lu.assertEquals(#cached, 1, "only the verdict-bearing entry is cached")
   for _, f in ipairs(files) do
     if f.path == "a.lua" then
-      H.eq(f.cached, nil, "verdict-less entry is a cache miss")
+      lu.assertEquals(f.cached, nil, "verdict-less entry is a cache miss")
     else
-      H.truthy(f.cached ~= nil, "b.lua carries its cached entry")
-      H.eq(f.cached.verdict, "approve")
+      lu.assertTrue(f.cached ~= nil, "b.lua carries its cached entry")
+      lu.assertEquals(f.cached.verdict, "approve")
     end
   end
 
@@ -202,67 +204,67 @@ H.case("review cache: verdict-less ledger entries are cache misses", function()
     verdict = "request-changes", raw = "SUMMARY: needs work\nVERDICT: request-changes",
   })
   files, cached = Dispatch._resolve_review_files(state, target, spec, snap, false)
-  H.eq(#cached, 2, "both verdict-bearing entries cached")
+  lu.assertEquals(#cached, 2, "both verdict-bearing entries cached")
   for _, f in ipairs(files) do
-    H.truthy(f.cached ~= nil)
+    lu.assertTrue(f.cached ~= nil)
   end
 
   -- force_review bypasses even a good cache entry
   files, cached = Dispatch._resolve_review_files(state, target, spec, snap, true)
-  H.eq(#cached, 0, "force_review re-reviews everything")
+  lu.assertEquals(#cached, 0, "force_review re-reviews everything")
   for _, f in ipairs(files) do
-    H.eq(f.cached, nil)
+    lu.assertEquals(f.cached, nil)
   end
-end)
+end
 
-H.case("normalize_input: files basis round-trips with files intact", function()
+function TestDispatch:test_normalize_input_files_basis_round_trips_with_files_intact()
   local targets, err = Dispatch.normalize_input({
     specialist = "r", brief = "review the readme", kind = "review",
     scope = { basis = "files", files = { "README.md", "lua/**/*.lua" } },
   })
-  H.eq(err, nil)
-  H.eq(targets[1].scope.basis, "files")
-  H.eq(targets[1].scope.files, { "README.md", "lua/**/*.lua" })
+  lu.assertEquals(err, nil)
+  lu.assertEquals(targets[1].scope.basis, "files")
+  lu.assertEquals(targets[1].scope.files, { "README.md", "lua/**/*.lua" })
   -- unknown basis still falls back to changed
   targets = Dispatch.normalize_input({
     specialist = "r", brief = "b", scope = { basis = "bogus" },
   })
-  H.eq(targets[1].scope.basis, "changed")
-end)
+  lu.assertEquals(targets[1].scope.basis, "changed")
+end
 
-H.case("normalize_input: kind consult is accepted", function()
+function TestDispatch:test_normalize_input_kind_consult_is_accepted()
   local targets, err = Dispatch.normalize_input({
     specialist = "x", brief = "b", kind = "consult",
   })
-  H.eq(err, nil)
-  H.eq(targets[1].kind, "consult")
-end)
+  lu.assertEquals(err, nil)
+  lu.assertEquals(targets[1].kind, "consult")
+end
 
-H.case("_review_path_in_root: containment guard on normalized absolute paths", function()
+function TestDispatch:test_review_path_in_root_containment_guard_on_normalized_absolute_paths()
   local root = "/tmp/proj"
-  H.eq(Dispatch._review_path_in_root(root, "/tmp/proj/a.lua"), "a.lua")
-  H.eq(Dispatch._review_path_in_root(root, "/tmp/proj/sub/b.lua"), "sub/b.lua")
-  H.eq(Dispatch._review_path_in_root(root, "/tmp/proj/../etc/passwd"), nil,
+  lu.assertEquals(Dispatch._review_path_in_root(root, "/tmp/proj/a.lua"), "a.lua")
+  lu.assertEquals(Dispatch._review_path_in_root(root, "/tmp/proj/sub/b.lua"), "sub/b.lua")
+  lu.assertEquals(Dispatch._review_path_in_root(root, "/tmp/proj/../etc/passwd"), nil,
     "traversal collapses outside the root")
-  H.eq(Dispatch._review_path_in_root(root, "/etc/passwd"), nil, "absolute-outside refused")
-  H.eq(Dispatch._review_path_in_root(root, "/tmp/projx/a.lua"), nil,
+  lu.assertEquals(Dispatch._review_path_in_root(root, "/etc/passwd"), nil, "absolute-outside refused")
+  lu.assertEquals(Dispatch._review_path_in_root(root, "/tmp/projx/a.lua"), nil,
     "a sibling directory sharing the prefix is not inside")
-  H.eq(Dispatch._review_path_in_root(root, "-leading-dash"), nil,
+  lu.assertEquals(Dispatch._review_path_in_root(root, "-leading-dash"), nil,
     "non-absolute (leading-dash) paths refused")
-  H.eq(Dispatch._review_path_in_root(root, "/tmp/proj"), nil, "the root itself is not a file")
-  H.eq(Dispatch._review_path_in_root(root, nil), nil)
-end)
+  lu.assertEquals(Dispatch._review_path_in_root(root, "/tmp/proj"), nil, "the root itself is not a file")
+  lu.assertEquals(Dispatch._review_path_in_root(root, nil), nil)
+end
 
-H.case("policy: consults are main-only but run on both specialist types", function()
+function TestDispatch:test_policy_consults_are_main_only_but_run_on_both_specialist_types()
   local main = { name = "main", chain = {} }
-  H.eq(Dispatch.check_policy({ specialist = "x", brief = "b", kind = "consult" }, review_spec, main),
+  lu.assertEquals(Dispatch.check_policy({ specialist = "x", brief = "b", kind = "consult" }, review_spec, main),
     "consult", "consult a review-type specialist")
-  H.eq(Dispatch.check_policy({ specialist = "x", brief = "b", kind = "consult" }, impl_spec, main),
+  lu.assertEquals(Dispatch.check_policy({ specialist = "x", brief = "b", kind = "consult" }, impl_spec, main),
     "consult", "consult an implementation-type specialist")
   local nested = { name = "impl", chain = { { name = "a", kind = "task" } } }
   local ok, err = ok_policy({ specialist = "x", brief = "b", kind = "consult" }, impl_spec, nested)
-  H.eq(ok, false)
-  H.has(err, "main-only")
+  lu.assertEquals(ok, false)
+  lu.assertStrContains(err, "main-only")
   -- even a main-chain implementer (impl-depth 0, allowlisted) cannot consult
   local child = {
     name = "test-engineer",
@@ -270,6 +272,8 @@ H.case("policy: consults are main-only but run on both specialist types", functi
     delegate = { tasks = { "x" } },
   }
   ok, err = ok_policy({ specialist = "x", brief = "b", kind = "consult" }, impl_spec, child)
-  H.eq(ok, false)
-  H.has(err, "main-only")
-end)
+  lu.assertEquals(ok, false)
+  lu.assertStrContains(err, "main-only")
+end
+
+return TestDispatch

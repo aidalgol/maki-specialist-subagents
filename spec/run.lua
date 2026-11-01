@@ -1,5 +1,4 @@
--- Runs the whole suite. Requires Lua 5.x (or the maki host's Luau with a
--- module loader that resolves dotted names):
+-- Runs the whole suite with LuaUnit. Requires Lua 5.x:
 --
 --   $ lua spec/run.lua
 --
@@ -7,17 +6,20 @@
 -- entry file + `lua/specialist_subagents/` package dir combination (ambiguous
 -- component), so the suite runs on plain Lua.
 
-package.path = "./spec/?.lua;./lua/?.lua;" .. package.path
+package.path = "./spec/?.lua;./lua/?.lua;./external/luaunit/?.lua;" .. package.path
 
-local H = require("helpers")
+local luaunit = require("luaunit")
 
-require("report_spec")
-require("spec_spec")
-require("ledger_spec")
-require("git_spec")
-require("dispatch_spec")
-require("config_spec")
-require("permissions_spec")
-require("session_builder_spec")
-
-H.report()
+luaunit.setVerbosity(luaunit.VERBOSITY_VERBOSE)
+local runner = luaunit.LuaUnit.new()
+runner:runSuiteByInstances({
+  { "TestConfig", require("config_spec") },
+  { "TestDispatch", require("dispatch_spec") },
+  { "TestGit", require("git_spec") },
+  { "TestLedger", require("ledger_spec") },
+  { "TestPermissions", require("permissions_spec") },
+  { "TestReport", require("report_spec") },
+  { "TestSessionBuilder", require("session_builder_spec") },
+  { "TestSpec", require("spec_spec") },
+})
+os.exit(runner.result.notSuccessCount == 0 and 0 or 1)

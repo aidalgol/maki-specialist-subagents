@@ -245,21 +245,17 @@ semantically.
 
 ## Testing
 
-Code that does not need to call into the Maki API is unit-tested in plain Lua
-without Maki. The standalone **Lua** interpreter is used because Luau's
+Code that does not need to call into the Maki API is unit-tested with
+[LuaUnit](https://github.com/bluebird75/luaunit), vendored as the submodule
+`external/luaunit`. The standalone **Lua** interpreter is used because Luau's
 require-by-string refuses this repository's layout (the entry file
 `lua/specialist_subagents.lua` beside the package directory
 `lua/specialist_subagents/` is an ambiguous component), while Lua's
-`package.path` require resolves it. Maki's own module loader handles dotted
-names, so the suite also runs inside Maki.
+`package.path` require resolves it.
 
 ```sh
 $ lua spec/run.lua
 ```
-
-The suite uses the same helper API as maki's `maki.test_helpers` (`case`,
-`eq`, `has`, `report`); inside Maki the real helper is used, outside it a
-local stand-in with identical semantics runs instead.
 
 Live-session behaviour (dispatch, cache hits, joins, nested delegation) requires
 manual testing.

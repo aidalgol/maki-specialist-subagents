@@ -1,6 +1,8 @@
 -- Specialist definition validation and defaults.
 
-local H = require("helpers")
+local lu = require("luaunit")
+
+local TestSpec = {}
 local Spec = require("specialist_subagents.spec")
 
 local function minimal(over)
@@ -15,159 +17,159 @@ local function minimal(over)
   return def
 end
 
-H.case("validate: minimal review definition passes with defaults", function()
+function TestSpec:test_validate_minimal_review_definition_passes_with_defaults()
   local norm, err, warnings = Spec.validate(minimal())
-  H.eq(err, nil)
-  H.eq(#warnings, 0)
-  H.eq(norm.name, "sample-reviewer")
-  H.eq(norm.instructions, "sample-reviewer.md")
-  H.eq(norm.omit_agents_md, false)
-  H.eq(norm.delegate, nil)
-  H.eq(norm.review.files, {})
-  H.eq(norm.skills, {})
-end)
+  lu.assertEquals(err, nil)
+  lu.assertEquals(#warnings, 0)
+  lu.assertEquals(norm.name, "sample-reviewer")
+  lu.assertEquals(norm.instructions, "sample-reviewer.md")
+  lu.assertEquals(norm.omit_agents_md, false)
+  lu.assertEquals(norm.delegate, nil)
+  lu.assertEquals(norm.review.files, {})
+  lu.assertEquals(norm.skills, {})
+end
 
-H.case("validate: name format is enforced", function()
+function TestSpec:test_validate_name_format_is_enforced()
   for _, bad in ipairs({ "", "X", "has space", "under_score", "-lead" }) do
     local norm, err = Spec.validate(minimal({ name = bad }))
-    H.eq(norm, nil, "name " .. bad .. " must fail")
-    H.has(err, "name")
+    lu.assertEquals(norm, nil, "name " .. bad .. " must fail")
+    lu.assertStrContains(err, "name")
   end
   local norm = Spec.validate(minimal({ name = "scss-reviewer2" }))
-  H.truthy(norm)
-end)
+  lu.assertTrue(norm ~= nil)
+end
 
-H.case("validate: type is required and constrained", function()
-  H.eq(Spec.validate(minimal({ type = "other" })), nil)
-  H.eq(Spec.validate({ name = "x", description = "d" }), nil, "missing type fails")
-  H.truthy(Spec.validate(minimal({ type = "implementation" })))
-end)
+function TestSpec:test_validate_type_is_required_and_constrained()
+  lu.assertEquals(Spec.validate(minimal({ type = "other" })), nil)
+  lu.assertEquals(Spec.validate({ name = "x", description = "d" }), nil, "missing type fails")
+  lu.assertTrue(Spec.validate(minimal({ type = "implementation" })) ~= nil)
+end
 
-H.case("validate: description required", function()
-  H.eq(Spec.validate(minimal({ description = "" })), nil)
-  H.eq(Spec.validate({ name = "x", type = "review" }), nil, "missing description fails")
-end)
+function TestSpec:test_validate_description_required()
+  lu.assertEquals(Spec.validate(minimal({ description = "" })), nil)
+  lu.assertEquals(Spec.validate({ name = "x", type = "review" }), nil, "missing description fails")
+end
 
-H.case("validate: instructions default and override", function()
-  H.eq(Spec.validate(minimal({ instructions = "custom.md" })).instructions, "custom.md")
-  H.eq(Spec.validate(minimal({ instructions = "" })).instructions, "sample-reviewer.md")
-end)
+function TestSpec:test_validate_instructions_default_and_override()
+  lu.assertEquals(Spec.validate(minimal({ instructions = "custom.md" })).instructions, "custom.md")
+  lu.assertEquals(Spec.validate(minimal({ instructions = "" })).instructions, "sample-reviewer.md")
+end
 
-H.case("validate: model table", function()
+function TestSpec:test_validate_model_table()
   local norm, err, warnings = Spec.validate(minimal({ model = { tier = "fast" } }))
-  H.eq(err, nil)
-  H.eq(warnings, {})
-  H.eq(norm.model.tier, "fast")
+  lu.assertEquals(err, nil)
+  lu.assertEquals(warnings, {})
+  lu.assertEquals(norm.model.tier, "fast")
   norm, err, warnings = Spec.validate(minimal({ model = { spec = "m/x" } }))
-  H.eq(err, nil)
-  H.eq(warnings, {})
-  H.eq(norm.model.spec, "m/x")
-  H.eq(Spec.validate(minimal({ model = {} })), nil)
-  H.eq(Spec.validate(minimal({ model = "fast" })), nil)
-end)
+  lu.assertEquals(err, nil)
+  lu.assertEquals(warnings, {})
+  lu.assertEquals(norm.model.spec, "m/x")
+  lu.assertEquals(Spec.validate(minimal({ model = {} })), nil)
+  lu.assertEquals(Spec.validate(minimal({ model = "fast" })), nil)
+end
 
-H.case("validate: model tier and spec together warns, spec wins", function()
+function TestSpec:test_validate_model_tier_and_spec_together_warns_spec_wins()
   local norm, err, warnings = Spec.validate(minimal({ model = { tier = "fast", spec = "x/y" } }))
-  H.eq(err, nil)
-  H.eq(norm.model, { spec = "x/y" })
-  H.eq(#warnings, 1)
-  H.has(warnings[1], "tier is ignored")
-end)
+  lu.assertEquals(err, nil)
+  lu.assertEquals(norm.model, { spec = "x/y" })
+  lu.assertEquals(#warnings, 1)
+  lu.assertStrContains(warnings[1], "tier is ignored")
+end
 
-H.case("validate: thinking levels", function()
-  H.eq(Spec.validate(minimal({ thinking = "low" })).thinking, "low")
-  H.eq(Spec.validate(minimal({ thinking = 2048 })).thinking, 2048)
-  H.eq(Spec.validate(minimal({ thinking = "sideways" })), nil)
-end)
+function TestSpec:test_validate_thinking_levels()
+  lu.assertEquals(Spec.validate(minimal({ thinking = "low" })).thinking, "low")
+  lu.assertEquals(Spec.validate(minimal({ thinking = 2048 })).thinking, 2048)
+  lu.assertEquals(Spec.validate(minimal({ thinking = "sideways" })), nil)
+end
 
-H.case("validate: tools only/except", function()
+function TestSpec:test_validate_tools_only_except()
   local norm = Spec.validate(minimal({ tools = { except = { "bash" } } }))
-  H.eq(norm.tools.except, { "bash" })
-  H.eq(Spec.validate(minimal({ tools = { only = { "read" }, except = { "bash" } } })), nil)
-  H.eq(Spec.validate(minimal({ tools = { only = "read" } })), nil)
-end)
+  lu.assertEquals(norm.tools.except, { "bash" })
+  lu.assertEquals(Spec.validate(minimal({ tools = { only = { "read" }, except = { "bash" } } })), nil)
+  lu.assertEquals(Spec.validate(minimal({ tools = { only = "read" } })), nil)
+end
 
-H.case("validate: review.files globs", function()
+function TestSpec:test_validate_review_files_globs()
   local norm = Spec.validate(minimal({ review = { files = { "**/*.md" } } }))
-  H.eq(norm.review.files, { "**/*.md" })
-  H.eq(Spec.validate(minimal({ review = { files = "**/*.md" } })), nil)
-end)
+  lu.assertEquals(norm.review.files, { "**/*.md" })
+  lu.assertEquals(Spec.validate(minimal({ review = { files = "**/*.md" } })), nil)
+end
 
-H.case("validate: review type ignores delegate with a warning", function()
+function TestSpec:test_validate_review_type_ignores_delegate_with_a_warning()
   local norm, err, warnings = Spec.validate(minimal({ delegate = { reviews = true } }))
-  H.eq(err, nil)
-  H.eq(norm.delegate, nil)
-  H.eq(#warnings, 1)
-  H.has(warnings[1], "delegate is ignored")
-end)
+  lu.assertEquals(err, nil)
+  lu.assertEquals(norm.delegate, nil)
+  lu.assertEquals(#warnings, 1)
+  lu.assertStrContains(warnings[1], "delegate is ignored")
+end
 
-H.case("validate: implementation delegate defaults and validation", function()
+function TestSpec:test_validate_implementation_delegate_defaults_and_validation()
   local norm = Spec.validate(minimal({ type = "implementation" }))
-  H.eq(norm.delegate, { reviews = false, tasks = {} })
+  lu.assertEquals(norm.delegate, { reviews = false, tasks = {} })
   norm = Spec.validate(minimal({
     type = "implementation",
     delegate = { reviews = true, tasks = { "reviewer" } },
   }))
-  H.eq(norm.delegate.reviews, true)
-  H.eq(norm.delegate.tasks, { "reviewer" })
-  H.eq(Spec.validate(minimal({
+  lu.assertEquals(norm.delegate.reviews, true)
+  lu.assertEquals(norm.delegate.tasks, { "reviewer" })
+  lu.assertEquals(Spec.validate(minimal({
     type = "implementation", delegate = { reviews = "yes" },
   })), nil)
-  H.eq(Spec.validate(minimal({
+  lu.assertEquals(Spec.validate(minimal({
     type = "implementation", delegate = { tasks = { 1 } },
   })), nil)
-end)
+end
 
-H.case("validate: max_iterations", function()
-  H.eq(Spec.validate(minimal({ max_iterations = 2 })).max_iterations, 2)
-  H.eq(Spec.validate(minimal({ max_iterations = 0 })), nil)
-  H.eq(Spec.validate(minimal({ max_iterations = 2.5 })), nil)
-  H.eq(Spec.validate(minimal({ max_iterations = "3" })), nil)
-end)
+function TestSpec:test_validate_max_iterations()
+  lu.assertEquals(Spec.validate(minimal({ max_iterations = 2 })).max_iterations, 2)
+  lu.assertEquals(Spec.validate(minimal({ max_iterations = 0 })), nil)
+  lu.assertEquals(Spec.validate(minimal({ max_iterations = 2.5 })), nil)
+  lu.assertEquals(Spec.validate(minimal({ max_iterations = "3" })), nil)
+end
 
-H.case("validate: skills", function()
-  H.eq(Spec.validate(minimal({ skills = { "maki-plugin-dev" } })).skills, { "maki-plugin-dev" })
-  H.eq(Spec.validate(minimal({ skills = { 1 } })), nil)
-end)
+function TestSpec:test_validate_skills()
+  lu.assertEquals(Spec.validate(minimal({ skills = { "maki-plugin-dev" } })).skills, { "maki-plugin-dev" })
+  lu.assertEquals(Spec.validate(minimal({ skills = { 1 } })), nil)
+end
 
-H.case("validate: omit_agents_md", function()
-  H.eq(Spec.validate(minimal({ omit_agents_md = true })).omit_agents_md, true)
-end)
+function TestSpec:test_validate_omit_agents_md()
+  lu.assertEquals(Spec.validate(minimal({ omit_agents_md = true })).omit_agents_md, true)
+end
 
-H.case("validate: unknown top-level key warns and is ignored", function()
+function TestSpec:test_validate_unknown_top_level_key_warns_and_is_ignored()
   local norm, err, warnings = Spec.validate(minimal({ instrucions = "typo.md" }))
-  H.eq(err, nil)
-  H.eq(norm.instructions, "sample-reviewer.md")
-  H.eq(#warnings, 1)
-  H.has(warnings[1], "unknown key")
-  H.has(warnings[1], "instrucions")
-end)
+  lu.assertEquals(err, nil)
+  lu.assertEquals(norm.instructions, "sample-reviewer.md")
+  lu.assertEquals(#warnings, 1)
+  lu.assertStrContains(warnings[1], "unknown key")
+  lu.assertStrContains(warnings[1], "instrucions")
+end
 
-H.case("validate: unknown nested tools key warns", function()
+function TestSpec:test_validate_unknown_nested_tools_key_warns()
   local norm, err, warnings = Spec.validate(minimal({ tools = { only = { "read" }, exclude = { "bash" } } }))
-  H.eq(err, nil)
-  H.eq(norm.tools.only, { "read" })
-  H.eq(#warnings, 1)
-  H.has(warnings[1], "tools.exclude")
-end)
+  lu.assertEquals(err, nil)
+  lu.assertEquals(norm.tools.only, { "read" })
+  lu.assertEquals(#warnings, 1)
+  lu.assertStrContains(warnings[1], "tools.exclude")
+end
 
-H.case("validate: stale agents_md key warns as unknown", function()
+function TestSpec:test_validate_stale_agents_md_key_warns_as_unknown()
   local norm, err, warnings = Spec.validate(minimal({ agents_md = false }))
-  H.eq(err, nil)
-  H.eq(norm.omit_agents_md, false)
-  H.eq(#warnings, 1)
-  H.has(warnings[1], "agents_md")
-end)
+  lu.assertEquals(err, nil)
+  lu.assertEquals(norm.omit_agents_md, false)
+  lu.assertEquals(#warnings, 1)
+  lu.assertStrContains(warnings[1], "agents_md")
+end
 
-H.case("validate: unknown key warning survives a later branch error", function()
+function TestSpec:test_validate_unknown_key_warning_survives_a_later_branch_error()
   local norm, err, warnings = Spec.validate(minimal({ instrucions = "typo.md", thinking = "sideways" }))
-  H.eq(norm, nil)
-  H.has(err, "thinking")
-  H.eq(#warnings, 1)
-  H.has(warnings[1], "instrucions")
-end)
+  lu.assertEquals(norm, nil)
+  lu.assertStrContains(err, "thinking")
+  lu.assertEquals(#warnings, 1)
+  lu.assertStrContains(warnings[1], "instrucions")
+end
 
-H.case("validate: fully valid definition has no warnings", function()
+function TestSpec:test_validate_fully_valid_definition_has_no_warnings()
   local _, err, warnings = Spec.validate(minimal({
     instructions = "custom.md",
     model = { tier = "fast" },
@@ -177,18 +179,20 @@ H.case("validate: fully valid definition has no warnings", function()
     max_iterations = 2,
     skills = { "maki-plugin-dev" },
   }))
-  H.eq(err, nil)
-  H.eq(warnings, {})
-end)
+  lu.assertEquals(err, nil)
+  lu.assertEquals(warnings, {})
+end
 
-H.case("iteration_cap falls back to the config default", function()
+function TestSpec:test_iteration_cap_falls_back_to_the_config_default()
   local norm = Spec.validate(minimal())
-  H.eq(Spec.iteration_cap(norm, 3), 3)
+  lu.assertEquals(Spec.iteration_cap(norm, 3), 3)
   norm = Spec.validate(minimal({ max_iterations = 5 }))
-  H.eq(Spec.iteration_cap(norm, 3), 5)
-end)
+  lu.assertEquals(Spec.iteration_cap(norm, 3), 5)
+end
 
-H.case("validate: non-table input", function()
-  H.eq(Spec.validate("nope"), nil)
-  H.eq(Spec.validate(nil), nil)
-end)
+function TestSpec:test_validate_non_table_input()
+  lu.assertEquals(Spec.validate("nope"), nil)
+  lu.assertEquals(Spec.validate(nil), nil)
+end
+
+return TestSpec
