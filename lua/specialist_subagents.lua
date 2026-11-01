@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- specialist-subagents: specialist subagents with harness-enforced
 -- delegation workflows (nested delegation, review ledger, budgets).
 --

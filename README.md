@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+
+SPDX-License-Identifier: MIT
+-->
+
 # specialist-subagents
 
 Specialist subagents for [Maki](https://maki.sh) with delegation-workflow

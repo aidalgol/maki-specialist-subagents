@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Knobs for the specialist-subagents plugin.
 --
 -- Plain table on purpose: maki rejects `register_options` from non-bundled

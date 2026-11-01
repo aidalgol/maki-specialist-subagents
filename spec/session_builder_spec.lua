@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- The review report tail is a machine contract: Report.parse_verdict /
 -- parse_summary / parse_findings key on these exact markers, and an
 -- unparsable tail satisfies no review gate. These cases pin the preamble's

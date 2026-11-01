@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- The delegate pipeline, shared by the orchestrator tool and every nested
 -- local delegate tool: resolve -> policy -> budgets -> claims -> review
 -- dedup/join -> spawn -> report -> ledger.

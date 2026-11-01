@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Permission relay for specialist sub sessions.
 --
 -- A sub session cannot answer a permission prompt, so a gated call (mostly

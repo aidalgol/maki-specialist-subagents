@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Narrowly scoped reviewer of this plugin's privileged surface. Its body
 -- encodes the checklist from the security posture section of the plan.
 return {

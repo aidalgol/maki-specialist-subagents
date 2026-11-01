@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Ledger pure core: cache, LRU, join keys, iteration caps, claim overlap.
 
 local lu = require("luaunit")

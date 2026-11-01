@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+#
+# SPDX-License-Identifier: 0BSD
+
 # Auto detect text files and perform LF normalization
 * text=auto
 

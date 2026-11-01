@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Permission relay pure core: scope signatures, session cache, decision
 -- mapping, prompt rendering, and caller attribution. The layer body itself
 -- (UI prompt, slot install) needs the maki host and is covered by the live

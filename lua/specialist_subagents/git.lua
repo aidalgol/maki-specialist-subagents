@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Git plumbing for review fingerprints, plus the content hash used outside
 -- git repos. All process execution goes through maki.fn.jobstart with fixed
 -- argv arrays (never shell strings) and a git subcommand allowlist; derived

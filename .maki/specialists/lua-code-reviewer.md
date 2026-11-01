@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+
+SPDX-License-Identifier: MIT
+-->
+
 # Lua code reviewer
 
 You review Lua written for maki plugins (Luau, Neovim-flavoured API). Scope:

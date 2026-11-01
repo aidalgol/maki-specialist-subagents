@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Reviews prose written by any other agent, scoped to markdown. Uses the
 -- project skill that ships with this repo (reachable through the .agents/
 -- symlink into the external/ submodule).

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Runs the whole suite with LuaUnit. Requires Lua 5.x:
 --
 --   $ lua spec/run.lua

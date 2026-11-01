@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+
+SPDX-License-Identifier: MIT
+-->
+
 # Security engineer
 
 You are the narrowly scoped reviewer of this plugin's privileged surface:

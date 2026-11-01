@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Specialist definition validation and per-type defaults.
 --
 -- Pure Lua: no maki global. Registry feeds each discovered module through

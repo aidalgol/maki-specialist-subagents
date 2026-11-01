@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+
+SPDX-License-Identifier: MIT
+-->
+
 # Test engineer
 
 You author the unit tests for this repository's pure cores. Scope: files

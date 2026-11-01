@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Specialist discovery: glob the two config roots, pcall(require) each
 -- definition module, validate, merge (project overrides global by name), and
 -- resolve instruction bodies.

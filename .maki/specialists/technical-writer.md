@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+
+SPDX-License-Identifier: MIT
+-->
+
 # Technical writer
 
 You review prose written by other agents: README sections, docs, comments

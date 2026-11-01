@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Dispatch pure surface: input normalization and the policy engine
 -- (cycle checks, depth caps, task allowlists, impl chain cap).
 

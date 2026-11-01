@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+#
+# SPDX-License-Identifier: 0BSD
+
 [submodule "external/red-hat-tech-writing-style-skill"]
 	path = external/red-hat-tech-writing-style-skill
 	url = https://gitlab.com/aidalgol/red-hat-tech-writing-style-skill.git

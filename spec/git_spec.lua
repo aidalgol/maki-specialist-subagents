@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- git.lua pure half: hashing, porcelain parsing, glob matching, path checks.
 
 local lu = require("luaunit")

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Verdict/finding parsing and caller-facing report text.
 --
 -- Pure Lua: no maki global, loadable and testable outside the host.

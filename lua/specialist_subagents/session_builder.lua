@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Session assembly: system prompt (including deterministic `skills`
 -- loading), per-type tool sets, model/thinking clamps, and the nested
 -- delegate local tool.

@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- Reviews this plugin's own Lua for handler error propagation, permission
 -- declarations, and API use. Demonstrates deterministic loading of a builtin
 -- skill (maki-plugin-dev).

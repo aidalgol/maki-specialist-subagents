@@ -1,3 +1,7 @@
+-- SPDX-FileCopyrightText: 2026 Aidan Gauland <aidalgol+git@fastmail.net>
+--
+-- SPDX-License-Identifier: MIT
+
 -- The task-delegated author of this repo's unit tests. Doubles as the
 -- canonical "implementation specialist in both roles" example: the
 -- orchestrator delegates test authoring (kind = "task"), and anyone can
