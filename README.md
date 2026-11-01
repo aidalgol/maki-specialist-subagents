@@ -1,10 +1,10 @@
 # specialist-subagents
 
-Specialist subagents for [maki](https://maki.sh) with delegation-workflow
-support that goes beyond "just spawn a subagent": a two-type specialist
-system, harness-enforced nested delegation, a content-addressed review
-ledger that deduplicates reviews, and budgets that make delegation trees
-safe instead of forbidden.
+Specialist subagents for [Maki](https://maki.sh) with delegation-workflow
+support that goes beyond "just spawn a subagent": a two-type specialist system,
+harness-enforced nested delegation, a content-addressed review ledger that
+deduplicates reviews, and budgets that make delegation trees safe instead of
+forbidden.
 
 ## What it gives you
 
@@ -15,24 +15,17 @@ safe instead of forbidden.
 | `/specialists` | user | Catalog, live invocations, recent coverage. |
 | prompt hint (`tool_usage`) | main | Fresh catalog plus delegation guidance, rebuilt every run. |
 
-A registered `delegate` tool is hidden from sub sessions
-(`audiences = { "main" }`); nested delegation exists only as per-invoker
-`local_tools` closures, so a sub session can never reach the orchestrator's
-tool.
-
 ## Specialist definitions
 
-Definitions are Lua modules; instruction bodies are standalone markdown
-files. Both config roots are globbed, and project definitions override
-global ones by `name`:
+A specialist is defined by a Lua module and a markdown instruction file, located under either the project-local `.maki/` directory, or the user's global Maki config directory.
 
-- Project: `<project>/.maki/lua/specialists/<stem>.lua`, body at
-  `<project>/.maki/specialists/<name>.md`
-- Global: `~/.config/maki/lua/specialists/<stem>.lua`, body at
-  `~/.config/maki/specialists/<name>.md`
+- Project: `<project>/.maki/lua/specialists/`
+- Global: `~/.config/maki/lua/specialists/`
 
-The module stem (file basename) must be a valid require path (underscores); the display
-`name` may use dashes.
+The basename of the Lua module must be a valid require path, but there is
+no restriction on the markdown file. For example, `test_engineer.lua` +
+`test-engineer.md` would be valid; `test-engineer.lua` + `test-engineer.md`
+would not.
 
 ```lua
 -- .maki/lua/specialists/scss_reviewer.lua
@@ -103,90 +96,46 @@ return {
 }
 ```
 
-A definition that fails to load or validate stops the plugin from loading:
-maki logs an error that names each broken file and the reason, and none of
-the plugin's tools or commands register. Fix the definition and run
-`/reload`. Non-fatal problems (a definition warning, a duplicate name) keep
-the plugin loaded; `/specialists` lists them under "Discovery warnings".
+An invalid definition prevents the plugin from loading, causing Maki to log an
+error naming each broken file, with a reason. This is to avoid you wasting time
+and tokens in a session with some of your specialists unavailable, when you
+thought they would be used.
 
-Both config roots are scanned, so a broken definition in the global
-directory disables the plugin in every project until you fix it.
+Non-fatal issues can still occur and allow the plugin to load, but how you
+learn of them depends on the kind of issue.
+
+At load, definition problems such as duplicate specialist names and invalid keys
+become discovery warnings. `/specialists` lists them under "Discovery warnings",
+and the delegation guidance shown to the main agent includes them. Nothing is
+written to the log.
+
+At dispatch time, problems with a specialist's environment are logged, such as
+a requested skill or instruction file that cannot be found. These surface only
+in the log, so a specialist may run without its intended instructions if you do
+not check.
+
+Note that because the global specialists definitions are always read, a broken
+global specialist disables the plugin in every project.
 
 ### Tool defaults
 
+The default tools available to a specialist depends upon the value of the `type`
+field in the specialist definition.
+
+#### Review
+
 When `type = "review"`, the specialist has read tools plus `bash` and the web
-tools: arbitrary commands by design (ruff, stylelint, clippy, `npm run`, project
-linters). Safety rests entirely on maki's permission machinery, never on command
-vetting here. Strict read-only is one line away: `tools = { except = { "bash"
-} }`.
+tools. This is by design, because it is impossible to know ahead of time what
+a specialist will need to properly do its job. Maki's permission system is the
+security mechanism. You can remove any tools via the specialist table field
+`tools.except`.
 
-When `type = "implementation"`, the full `general_sub` tool set minus
-interactive tools, plus the nested `delegate` local tool per the `delegate`
-policy. `batch`, `code_execution`, and `task` are always excluded (their
-permission cost exceeds this plugin's grants).
+#### Implementation
 
-### Dispatch kinds select the envelope
-
-`kind` selects the envelope, not the specialist. `kind = "review"` always
-uses the review tool set, the review report contract, fingerprints, and the
-ledger, and records no claims — even for implementation-type targets.
-`kind = "task"` uses the implementation tool set and records claims. This is
-what lets one implementation specialist work in both roles.
-
-Ask a specialist a question with `kind = "consult"` when you need judgement
-rather than work. The specialist answers from the review tool set regardless
-of its type, returns the free-form answer as the report, and records nothing
-in the ledger — there is no review contract (no SUMMARY/FINDINGS/VERDICT
-tail). Only main can consult: nested delegate tools never offer the kind.
-
-### Review scope basis
-
-Set the review scope with `scope.basis`. Use `"changed"` (the default) to
-filter the git-changed set with `scope.files` globs, `"plan"` to review the
-ready plan file, and `"files"` to resolve `scope.files` as explicit paths or
-globs against the working tree. With `"files"`, the review reads on-disk
-state and ignores git status, so a clean tree can be reviewed too. The
-resolved set is capped at `review_files_cap` (50) files, and patterns that
-match nothing produce warnings, not failures.
-
-## Delegation model
-
-Every dispatch runs the same pipeline, whether it comes from the
-orchestrator tool or a nested local tool:
-
-1. **Policy** — cycle check (a target already in the invocation chain is
-   refused), review depth cap, and the task rules: task delegation is
-   allowed from main, or from an implementation specialist at impl-depth 0
-   whose `delegate.tasks` allowlist names the target. A specialist that was
-   itself delegated by a specialist gets **no** task-delegation capability
-   (impl chain cap 1) — enforced by which local tools the harness installs,
-   never by prompt text.
-2. **Budgets** — concurrent sessions (`max_active`), delegations per tool
-   call (`per_turn_budget`), and a fix<->re-review iteration cap per
-   (implementer, reviewer, scope). All enforced in handlers, never in
-   prompt text.
-3. **Claims** — task dispatches declare path globs; overlap with an active
-   sibling claim warns (or refuses under `strict_claims`).
-4. **Review dedup** — fingerprints are `hash(base commit ++ path ++
-   diff-or-content hash)`. Unchanged content returns the recorded verdict
-   marked `CACHED REVIEW` with no session; partial coverage reviews only the
-   unresolved subset; an identical in-flight review is joined and both
-   callers receive the same parsed result. `force_review = true` re-runs.
-5. **Spawn and report** — a self-contained brief (task, chain trace, and
-   for reviews the changed-file list plus diff text), one prompt, lenient
-   parsing of the machine-readable tail
-   (`SUMMARY:` / `FINDINGS:` / `VERDICT: approve|request-changes`).
-   Unparsable tails degrade to raw text and satisfy nothing. Ledger entries
-   are written only from parsed results, through one atomic choke point.
-6. **Fan-out** — targets run concurrently, bounded by `max_active`; the
-   report aggregates per-target sections, summed cost, and the union of
-   warnings.
-
-Review-kind reports end with a computed **coverage audit**: changed file ->
-reviewing specialist -> verdict, plus an `UNCOVERED` list of changed files
-no dispatched scope covered, each annotated with a `review.files` glob
-suggestion where one matches. Routing stays the model's judgment; the
-harness computes what was missed.
+When `type = "implementation"`, the specialist has the full `general_sub`
+toolset, minus interactive tools, plus the nested `delegate` local tool per the
+`delegate` policy. `batch`, `code_execution`, and `task` are always excluded
+(their permission cost exceeds this plugin's grants).
 
 ## The AGENTS.md gate recipe
 
@@ -215,14 +164,15 @@ maki.pack.add({
 })
 ```
 
-or vendor the repo's `lua/`, `init.lua`, and `plugin.toml` into
-`~/.config/maki/` and `require("specialist_subagents")` from
-`~/.config/maki/init.lua`.
+This repository itself also uses the plugin: four specialists under `.maki/`.
 
-This repository also dogfoods four specialists under `.maki/`
-(`lua-code-reviewer`, `technical-writer`, `security-engineer`,
-`test-engineer`), so working on this project with maki installed exercises
-the whole pipeline on itself.
+- `lua-code-reviewer`
+- `technical-writer`
+- `security-engineer`
+- `test-engineer`
+
+This means that working on this project with maki installed exercises the whole
+pipeline on itself.
 
 ## Permissions guidance
 
@@ -295,17 +245,24 @@ semantically.
 
 ## Testing
 
-The pure cores (definition validation, ledger semantics, verdict parsing,
-git fingerprints, glob matching, policy checks, permission-relay cache and
-prompt rendering) are unit-tested without the maki host:
+Code that does not need to call into the Maki API is unit-tested in plain Lua
+without Maki. The standalone **Lua** interpreter is used because Luau's
+require-by-string refuses this repository's layout (the entry file
+`lua/specialist_subagents.lua` beside the package directory
+`lua/specialist_subagents/` is an ambiguous component), while Lua's
+`package.path` require resolves it. Maki's own module loader handles dotted
+names, so the suite also runs inside Maki.
 
-```
-cd <repo root> && lua spec/run.lua
+```sh
+$ lua spec/run.lua
 ```
 
-The suite uses the same helper API as maki's `maki.test_helpers` and runs
-inside maki too. Live-session behaviour (dispatch, cache hits, joins,
-nested delegation) has a manual checklist:
+The suite uses the same helper API as maki's `maki.test_helpers` (`case`,
+`eq`, `has`, `report`); inside Maki the real helper is used, outside it a
+local stand-in with identical semantics runs instead.
+
+Live-session behaviour (dispatch, cache hits, joins, nested delegation) requires
+manual testing.
 
 1. `/reload` in a project with specialists; check `/specialists` for
    definition warnings.
@@ -325,22 +282,3 @@ nested delegation) has a manual checklist:
    while `delegate` is absent; fix the definition, `/reload`, and confirm the
    tool registers again. A definition that only warns (a `model.tier` next to
    a `model.spec`, or an unknown key) still loads the plugin.
-
-## Known host-behaviour notes
-
-- A parallel `targets` fan-out opens one subagent session per target (verified
-  via the log: equal session lifetimes, interleaved API streams). maki's
-  tasks view has shown only one of the concurrent specialist tasks; treat the
-  log or `/specialists` as the source of truth for live invocations until the
-  host UI lists them all.
-- Audience gating (`audiences = { "main" }`) hiding `delegate` from sub
-  sessions is verified against maki's documented tool-registry semantics and
-  the prompt render; verify once from a live nested session on first use.
-- If maki refuses a session because a handed-over tool's permission bank
-  exceeds the plugin's grants, the session builder retries with the
-  over-cost tools dropped and logs a warning.
-- Specialist definition modules are config code (the same trust class as
-  any project plugin). When this plugin is not installed in the same config
-  dir as the definitions, loading falls back to reading those same two
-  documented roots and compiling them — never from anywhere else, never
-  from model input.
