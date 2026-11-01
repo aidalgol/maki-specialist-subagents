@@ -158,11 +158,13 @@ function M.preamble(spec, kind, invocation)
     out[#out + 1] = table.concat({
       "This is a review invocation. Report findings about the specified content only.",
       "You have no delegation capability; do the review yourself.",
-      "End your final report with exactly this machine-readable tail (nothing after it):",
+      "End your final report with exactly this machine-readable tail, in this order, with nothing after it:",
       "SUMMARY: <one line>",
       "FINDINGS:",
       "1. <finding>",
-      "VERDICT: approve | request-changes",
+      "VERDICT: approve",
+      "",
+      "The tail is parsed by a machine, not read as prose. Write the verdict as the bare token on its own last line: `VERDICT: approve` or `VERDICT: request-changes` -- no other words, punctuation, or markdown on that line. A report whose tail does not parse is recorded as unparsable and satisfies no review gate, so the work gets re-reviewed.",
       "Use VERDICT: approve when nothing needs changing, VERDICT: request-changes otherwise. Every finding gets a numbered line under FINDINGS: (write `FINDINGS:` with no items when there are none).",
     }, "\n")
   else

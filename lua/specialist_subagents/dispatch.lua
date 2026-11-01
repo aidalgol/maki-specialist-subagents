@@ -895,5 +895,6 @@ end
 
 M._state = State -- exposed for /specialists and tests
 M._store_finished = store_finished -- exposed for tests (finished-handoff wiring)
+M._resolve_review_files = resolve_review_files -- exposed for tests (cache-miss rule)
 
 return M

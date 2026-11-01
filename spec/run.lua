@@ -18,5 +18,6 @@ require("git_spec")
 require("dispatch_spec")
 require("config_spec")
 require("permissions_spec")
+require("session_builder_spec")
 
 H.report()

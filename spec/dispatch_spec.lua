@@ -162,3 +162,55 @@ H.case("finished handoff: stored on State, bounded at MAX_FINISHED", function()
     Dispatch._state.finished[k] = nil
   end
 end)
+
+-- Regression: an unparsable review satisfies nothing, the review cache
+-- included. combined_verdict defaults to "approve", so a verdict-less
+-- cached entry would approve unchanged files without any review running.
+H.case("review cache: verdict-less ledger entries are cache misses", function()
+  local Ledger = require("specialist_subagents.ledger")
+  local state = Ledger.new_state()
+  Ledger.record(state, {
+    specialist = "r", path = "a.lua", fingerprint = "fp1",
+    verdict = nil, raw = "garbage without a verdict line",
+  })
+  Ledger.record(state, {
+    specialist = "r", path = "b.lua", fingerprint = "fp2",
+    verdict = "approve", raw = "SUMMARY: ok\nVERDICT: approve",
+  })
+  local snap = { files = {
+    { path = "a.lua", fingerprint = "fp1" },
+    { path = "b.lua", fingerprint = "fp2" },
+  } }
+  local target = { specialist = "r", kind = "review", scope = { files = {} } }
+  local spec = { name = "r" }
+
+  local files, cached = Dispatch._resolve_review_files(state, target, spec, snap, false)
+  H.eq(#files, 2, "both scoped files resolved")
+  H.eq(#cached, 1, "only the verdict-bearing entry is cached")
+  for _, f in ipairs(files) do
+    if f.path == "a.lua" then
+      H.eq(f.cached, nil, "verdict-less entry is a cache miss")
+    else
+      H.truthy(f.cached ~= nil, "b.lua carries its cached entry")
+      H.eq(f.cached.verdict, "approve")
+    end
+  end
+
+  -- positive case: a verdict-bearing entry is served from cache
+  Ledger.record(state, {
+    specialist = "r", path = "a.lua", fingerprint = "fp1",
+    verdict = "request-changes", raw = "SUMMARY: needs work\nVERDICT: request-changes",
+  })
+  files, cached = Dispatch._resolve_review_files(state, target, spec, snap, false)
+  H.eq(#cached, 2, "both verdict-bearing entries cached")
+  for _, f in ipairs(files) do
+    H.truthy(f.cached ~= nil)
+  end
+
+  -- force_review bypasses even a good cache entry
+  files, cached = Dispatch._resolve_review_files(state, target, spec, snap, true)
+  H.eq(#cached, 0, "force_review re-reviews everything")
+  for _, f in ipairs(files) do
+    H.eq(f.cached, nil)
+  end
+end)
