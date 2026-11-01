@@ -156,3 +156,17 @@ end)
 H.case("format_coverage: empty input is empty", function()
   H.eq(Report.format_coverage(nil, nil), "")
 end)
+
+H.case("format_aggregate: consult result renders without review machinery", function()
+  local long = string.rep("advice ", 800) -- well past any line length, under the 4000 cap
+  local text = Report.format_aggregate({
+    { specialist = "technical-writer", kind = "consult", status = "done",
+      summary = long:sub(1, 4000), raw = long, chain = {}, warnings = {},
+      tokens = { input = 900, output = 700 }, duration_ms = 12000 },
+  })
+  H.has(text, "1 target(s), 1 completed, 0 not completed")
+  H.has(text, "technical-writer (consult) -- done")
+  H.has(text, "Summary: advice")
+  H.eq(text:find("VERDICT", 1, true), nil, "no review machinery")
+  H.eq(text:find("UNCOVERED", 1, true), nil, "no coverage audit for consults")
+end)

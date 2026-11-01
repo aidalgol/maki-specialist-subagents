@@ -63,15 +63,15 @@ local DELEGATE_SCHEMA = {
     },
     kind = {
       type = "string",
-      enum = { "review", "task" },
-      description = "Dispatch envelope. Defaults to the specialist's type. kind = \"review\" invokes an implementation specialist in review mode.",
+      enum = { "review", "task", "consult" },
+      description = "Dispatch envelope. Defaults to the specialist's type. kind = \"review\" invokes an implementation specialist in review mode. kind = \"consult\" asks a specialist for advice/judgement: no review contract, no ledger, the answer comes back as the report (main-only).",
     },
     scope = {
       type = "object",
-      description = "Review scope. files: glob filters over changed files; basis: \"changed\" (default) or \"plan\" (review the plan file).",
+      description = "Review scope. files: glob filters over changed files; basis: \"changed\" (default), \"plan\" (review the plan file), or \"files\" (explicit paths/globs resolved against the working tree; review on-disk state, git status ignored).",
       properties = {
         files = { type = "array", items = { type = "string" } },
-        basis = { type = "string", enum = { "changed", "plan" } },
+        basis = { type = "string", enum = { "changed", "plan", "files" } },
       },
     },
     claims = {
@@ -96,7 +96,7 @@ local DELEGATE_SCHEMA = {
             type = "object",
             properties = {
               files = { type = "array", items = { type = "string" } },
-              basis = { type = "string", enum = { "changed", "plan" } },
+              basis = { type = "string", enum = { "changed", "plan", "files" } },
             },
           },
           claims = { type = "array", items = { type = "string" } },
@@ -112,7 +112,7 @@ maki.api.register_tool({
   name = "delegate",
   description = [[Dispatch work to specialist subagents (defined in .maki/lua/specialists/ and ~/.config/maki/lua/specialists/). Scalar form: one specialist; list form: `targets` fans out in parallel and returns one aggregated report.
 
-Use it to delegate reviews of a change set (reviews are content-addressed: unchanged content returns the recorded verdict instantly, and an identical in-flight review is joined instead of duplicated) and to delegate implementation tasks to implementation-type specialists. Every dispatch runs a harness pipeline: cycle/depth/allowlist policy, budgets, path claims, and a review ledger shared across the session.
+Use it to delegate reviews of a change set (reviews are content-addressed: unchanged content returns the recorded verdict instantly, and an identical in-flight review is joined instead of duplicated), to delegate implementation tasks to implementation-type specialists, and — with kind = "consult" — to ask a specialist a question (main-only; no review contract, nothing recorded). Every dispatch runs a harness pipeline: cycle/depth/allowlist policy, budgets, path claims, and a review ledger shared across the session.
 
 Prefer one `targets` call over several sequential ones when several independent specialists apply.]],
   schema = DELEGATE_SCHEMA,
@@ -148,9 +148,9 @@ maki.api.register_tool({
       files = {
         type = "array",
         items = { type = "string" },
-        description = "Glob filters over the changed files (default: all changed files).",
+        description = "Glob filters over the changed files (default: all changed files). With basis = \"files\": explicit paths/globs resolved against the working tree.",
       },
-      basis = { type = "string", enum = { "changed", "plan" }, description = "Defaults to \"changed\"." },
+      basis = { type = "string", enum = { "changed", "plan", "files" }, description = "Defaults to \"changed\". \"files\": explicit paths/globs resolved against the working tree; on-disk state, git status ignored." },
     },
   },
   audiences = { "main", "general_sub" },
@@ -206,6 +206,8 @@ maki.api.register_prompt_hint({
       "- Resolve a report's UNCOVERED lines (changed files no dispatched scope covered) before declaring a review pass; `specialist_reviews` shows prior coverage cheaply.",
       "- Fix<->re-review rounds are capped per specialist and scope; change the content or accept the findings instead of re-dispatching.",
       "- Task dispatches to implementation specialists record path claims; overlapping claims warn (or refuse under strict_claims).",
+      "- To review explicit working-tree content (e.g. a clean tree), use scope.basis = \"files\" with explicit paths/globs instead of filtering changed files.",
+      "- When you need judgement rather than a diff review, consult instead of forcing a review: kind = \"consult\" asks a specialist a question (main-only; no review contract, nothing recorded).",
     }, "\n")
     if warnings and #warnings > 0 then
       lines[#lines + 1] = "Definition warnings: " .. table.concat(warnings, "; ")

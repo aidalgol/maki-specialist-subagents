@@ -214,3 +214,62 @@ H.case("review cache: verdict-less ledger entries are cache misses", function()
     H.eq(f.cached, nil)
   end
 end)
+
+H.case("normalize_input: files basis round-trips with files intact", function()
+  local targets, err = Dispatch.normalize_input({
+    specialist = "r", brief = "review the readme", kind = "review",
+    scope = { basis = "files", files = { "README.md", "lua/**/*.lua" } },
+  })
+  H.eq(err, nil)
+  H.eq(targets[1].scope.basis, "files")
+  H.eq(targets[1].scope.files, { "README.md", "lua/**/*.lua" })
+  -- unknown basis still falls back to changed
+  targets = Dispatch.normalize_input({
+    specialist = "r", brief = "b", scope = { basis = "bogus" },
+  })
+  H.eq(targets[1].scope.basis, "changed")
+end)
+
+H.case("normalize_input: kind consult is accepted", function()
+  local targets, err = Dispatch.normalize_input({
+    specialist = "x", brief = "b", kind = "consult",
+  })
+  H.eq(err, nil)
+  H.eq(targets[1].kind, "consult")
+end)
+
+H.case("_review_path_in_root: containment guard on normalized absolute paths", function()
+  local root = "/tmp/proj"
+  H.eq(Dispatch._review_path_in_root(root, "/tmp/proj/a.lua"), "a.lua")
+  H.eq(Dispatch._review_path_in_root(root, "/tmp/proj/sub/b.lua"), "sub/b.lua")
+  H.eq(Dispatch._review_path_in_root(root, "/tmp/proj/../etc/passwd"), nil,
+    "traversal collapses outside the root")
+  H.eq(Dispatch._review_path_in_root(root, "/etc/passwd"), nil, "absolute-outside refused")
+  H.eq(Dispatch._review_path_in_root(root, "/tmp/projx/a.lua"), nil,
+    "a sibling directory sharing the prefix is not inside")
+  H.eq(Dispatch._review_path_in_root(root, "-leading-dash"), nil,
+    "non-absolute (leading-dash) paths refused")
+  H.eq(Dispatch._review_path_in_root(root, "/tmp/proj"), nil, "the root itself is not a file")
+  H.eq(Dispatch._review_path_in_root(root, nil), nil)
+end)
+
+H.case("policy: consults are main-only but run on both specialist types", function()
+  local main = { name = "main", chain = {} }
+  H.eq(Dispatch.check_policy({ specialist = "x", brief = "b", kind = "consult" }, review_spec, main),
+    "consult", "consult a review-type specialist")
+  H.eq(Dispatch.check_policy({ specialist = "x", brief = "b", kind = "consult" }, impl_spec, main),
+    "consult", "consult an implementation-type specialist")
+  local nested = { name = "impl", chain = { { name = "a", kind = "task" } } }
+  local ok, err = ok_policy({ specialist = "x", brief = "b", kind = "consult" }, impl_spec, nested)
+  H.eq(ok, false)
+  H.has(err, "main-only")
+  -- even a main-chain implementer (impl-depth 0, allowlisted) cannot consult
+  local child = {
+    name = "test-engineer",
+    chain = { { name = "test-engineer", kind = "task" } },
+    delegate = { tasks = { "x" } },
+  }
+  ok, err = ok_policy({ specialist = "x", brief = "b", kind = "consult" }, impl_spec, child)
+  H.eq(ok, false)
+  H.has(err, "main-only")
+end)

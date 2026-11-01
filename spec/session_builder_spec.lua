@@ -27,3 +27,13 @@ H.case("task preamble: carries no verdict instruction", function()
   H.eq(p:find("VERDICT", 1, true), nil)
   H.eq(p:find("FINDINGS:", 1, true), nil)
 end)
+
+H.case("consult preamble: advisory framing, no review contract", function()
+  local p = SB.preamble({ name = "x", type = "implementation" }, "consult", { chain = {}, depth = 0 })
+  H.eq(p:find("VERDICT", 1, true), nil)
+  H.eq(p:find("FINDINGS:", 1, true), nil)
+  H.truthy(p:find("consultation", 1, true) ~= nil, "mentions consultation")
+  H.truthy(p:find("not reviewing a diff", 1, true) ~= nil, "advisory role stated")
+  -- review invocations keep their contract
+  H.truthy(review_preamble():find("VERDICT", 1, true) ~= nil)
+end)

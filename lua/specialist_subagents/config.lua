@@ -27,6 +27,14 @@ local M = {
   -- Reject task dispatches whose claims overlap an active sibling claim,
   -- instead of warning.
   strict_claims = false,
+  -- Max files one files-basis review may resolve (scope.basis = "files" is
+  -- model-supplied explicit paths/globs; the cap keeps a runaway `**/*` from
+  -- blowing up briefs and the ledger). Security control, like every budget
+  -- here: enforced in the dispatch handler, never in prompt text.
+  review_files_cap = 50,
+  -- Consult answers are the deliverable, so they get a wider cap than the
+  -- 2000-char task summary.
+  consult_summary_cap = 4000,
   -- Persisted review ledger LRU cap.
   ledger_cap = 500,
   -- Iteration-cap bookkeeping entries older than this many seconds expire.

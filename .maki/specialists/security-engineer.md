@@ -44,6 +44,11 @@ budgets. Do not report convention nits.
 4. **Model-supplied paths and globs** (scope, claims) are normalized, rooted
    against the project root, and `..`-rejected before any git/fs use;
    instructions and skill names resolve only through documented roots.
+   Explicit review paths (`scope.basis = "files"`) are model-supplied too:
+   normalized, rooted, containment-checked
+   (`Dispatch._review_path_in_root` re-verifies the normalized absolute path
+   sits inside the project root), and capped by `review_files_cap` before
+   any fs/glob use.
 5. **Registry discovery** only loads from the two config-dir
    `lua/specialists/` trees. No eval of tool input, no loads from elsewhere.
 6. **Zero `register_permission_rule`, zero `set_prompt`; exactly one wrapped
@@ -73,7 +78,10 @@ budgets. Do not report convention nits.
 7. **`audiences = { "main" }` on the orchestrator delegate tool** is the
    chain-bypass guard; nested delegation exists only as `local_tools`
    closures built per invoker policy. Flag any path that hands the
-   orchestrator tool to a sub session.
+   orchestrator tool to a sub session. Consults (`kind = "consult"`) are
+   main-only by the same guard: they run the review tool set (advisory,
+   no fs_write) and are refused by `check_policy` from any non-main
+   invoker.
 8. **Session hygiene:** `Session:close()` on every path (errors, Esc, joins);
    in-flight entries purged on failure; `mcp = false` explicit; model and
    thinking clamps passed through.

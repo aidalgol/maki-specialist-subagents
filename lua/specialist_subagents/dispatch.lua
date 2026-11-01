@@ -65,7 +65,11 @@ local function normalize_scope(scope)
       end
     end
   end
-  return { files = files, basis = scope.basis == "plan" and "plan" or "changed" }
+  local basis = scope.basis
+  if basis ~= "plan" and basis ~= "files" then
+    basis = "changed"
+  end
+  return { files = files, basis = basis }
 end
 
 local function normalize_target(raw, defaults_from)
@@ -78,7 +82,8 @@ local function normalize_target(raw, defaults_from)
   return {
     specialist = raw.specialist,
     brief = raw.brief,
-    kind = (raw.kind == "review" or raw.kind == "task") and raw.kind or nil,
+    kind = (raw.kind == "review" or raw.kind == "task" or raw.kind == "consult")
+      and raw.kind or nil,
     scope = normalize_scope(raw.scope),
     claims = (function()
       local c = {}
@@ -159,6 +164,16 @@ function M.check_policy(target, spec, invoker)
   local kind = target.kind or (spec.type == "review" and "review" or "task")
   local depth = #invoker.chain + 1
 
+  if kind == "consult" then
+    -- Consults are main-only in v1: nested delegate schemas never offer the
+    -- kind, and check_policy refuses it from any non-main invoker. No depth
+    -- cap is needed (consults cannot nest and build no delegate tool).
+    if invoker.name ~= "main" then
+      return nil, "consultations are main-only"
+    end
+    return kind, nil
+  end
+
   if kind == "review" then
     if depth > Config.review_max_depth then
       return nil, string.format(
@@ -205,9 +220,137 @@ local function plan_snapshot(cwd)
   }, nil
 end
 
+-- Pure containment guard on a normalized absolute path (exported for tests,
+-- like M._store_finished). Belt-and-braces on top of Git.validate_relpath
+-- (which already rejects `..` and leading dashes): re-checks that the
+-- lexically-normalized absolute path really sits inside the project root, so
+-- absolute or symlinked-out paths cannot slip through. Returns the relpath,
+-- nil when outside the root.
+local function norm_abs(p)
+  local s = p:gsub("\\", "/")
+  local root_prefix = s:sub(1, 1) == "/" and "/" or ""
+  local segs = {}
+  for seg in s:gmatch("[^/]+") do
+    if seg == ".." then
+      segs[#segs] = nil
+    elseif seg ~= "." then
+      segs[#segs + 1] = seg
+    end
+  end
+  return root_prefix .. table.concat(segs, "/")
+end
+
+function M._review_path_in_root(cwd, abs)
+  if type(cwd) ~= "string" or type(abs) ~= "string" then
+    return nil
+  end
+  if abs:sub(1, 1) ~= "/" then
+    return nil, "path must be absolute"
+  end
+  local root = norm_abs(cwd)
+  local norm = norm_abs(abs)
+  local prefix = root .. "/"
+  if root == "" or norm:sub(1, #prefix) ~= prefix then
+    return nil
+  end
+  local rel = norm:sub(#prefix + 1)
+  if rel == "" then
+    return nil
+  end
+  return rel
+end
+
+-- Snapshot for basis = "files": explicit model-supplied paths/globs resolved
+-- against the working tree via maki.fs.glob (gitignore-respecting), not a
+-- filter over the git-changed set. Every path is containment-checked and the
+-- set is capped at Config.review_files_cap before any fs use.
+local function files_snapshot(cwd, scope)
+  if not scope.files or #scope.files == 0 then
+    return nil, "basis = \"files\" needs scope.files"
+  end
+  local warnings = {}
+  local seen = {}
+  local files = {}
+  for _, pattern in ipairs(scope.files) do
+    local ok_glob, globbed = pcall(function()
+      return maki.fs.glob(tostring(pattern), { path = cwd, gitignore = true })
+    end)
+    if not ok_glob or type(globbed) ~= "table" or #globbed == 0 then
+      warnings[#warnings + 1] = string.format(
+        "scope.files pattern %q matched nothing", tostring(pattern))
+    else
+      for _, raw in ipairs(globbed) do
+        local rel = Git.validate_relpath(raw)
+        local abs = raw
+        if rel and not abs:find("^/") then
+          abs = maki.fs.normalize(maki.fs.joinpath(cwd, raw))
+        end
+        local in_root = rel and M._review_path_in_root(cwd, abs)
+        if not rel or not in_root then
+          warnings[#warnings + 1] = "refused out-of-root path: " .. tostring(raw)
+          warn_log("files-basis scope refused path " .. tostring(raw))
+        elseif not seen[in_root] then
+          seen[in_root] = true
+          files[#files + 1] = { path = in_root, abs = abs }
+        end
+      end
+    end
+  end
+  if #files == 0 then
+    return nil, "no files matched scope.files"
+  end
+  if #files > Config.review_files_cap then
+    local excluded = #files - Config.review_files_cap
+    for i = #files, Config.review_files_cap + 1, -1 do
+      files[i] = nil
+    end
+    local msg = string.format(
+      "file cap (%d) reached; %d file(s) not included",
+      Config.review_files_cap, excluded)
+    warn_log(msg)
+    warnings[#warnings + 1] = msg
+  end
+
+  -- fingerprints hash on-disk content; diff text mirrors changed_snapshot's
+  -- fallback caps (per-file 20000, total 60000) with `--- path ---` headers
+  local diff_parts = {}
+  local total = 0
+  local kept = {}
+  for _, f in ipairs(files) do
+    local ok_read, content = pcall(function() return maki.fs.read(f.abs) end)
+    if not ok_read or type(content) ~= "string" then
+      warnings[#warnings + 1] = "unreadable file skipped: " .. f.path
+    else
+      local diff = content:sub(1, 20000)
+      if #content > 20000 then
+        diff = diff .. "\n... (truncated)"
+      end
+      total = total + #diff
+      if total <= 60000 then
+        diff_parts[#diff_parts + 1] = "--- " .. f.path .. " ---\n" .. diff
+      end
+      kept[#kept + 1] = { path = f.path, fingerprint = Git.fnv1a(content), untracked = true }
+    end
+  end
+  local diff_text = table.concat(diff_parts, "\n")
+  if total > 60000 then
+    diff_text = diff_text .. "\n... (diff truncated at 60000 bytes)"
+  end
+  return {
+    base_oid = nil,
+    git = false,
+    files = kept,
+    diff_text = diff_text,
+    warnings = warnings,
+  }, nil
+end
+
 local function changed_snapshot(cwd, scope)
   if scope.basis == "plan" then
     return plan_snapshot(cwd)
+  end
+  if scope.basis == "files" then
+    return files_snapshot(cwd, scope)
   end
   local snap = Git.changed_snapshot(cwd, nil)
   local diff_parts = {}
@@ -240,15 +383,26 @@ end
 -- Per-file review outcomes (fresh, cached, or joined) for one target.
 -- Returns files = { { path, fingerprint, cached_entry? } }.
 local function resolve_review_files(state, target, spec, snap, force_review)
-  local scoped = Git.filter_by_globs(
-    (function()
-      local paths = {}
-      for _, f in ipairs(snap.files) do
-        paths[#paths + 1] = f.path
-      end
-      return paths
-    end)(),
-    target.scope.files)
+  local scoped
+  if target.scope.basis == "files" then
+    -- files-basis snapshots are already resolved to the explicit path set by
+    -- maki.fs.glob; re-filtering through this plugin's glob matcher would
+    -- only risk a semantic mismatch
+    scoped = {}
+    for _, f in ipairs(snap.files) do
+      scoped[#scoped + 1] = f.path
+    end
+  else
+    scoped = Git.filter_by_globs(
+      (function()
+        local paths = {}
+        for _, f in ipairs(snap.files) do
+          paths[#paths + 1] = f.path
+        end
+        return paths
+      end)(),
+      target.scope.files)
+  end
   local by_path = {}
   for _, f in ipairs(snap.files) do
     by_path[f.path] = f
@@ -478,12 +632,19 @@ local function run_target(ctx, target, invoker, call)
     end
   end
 
-  -- snapshot + review dedup
-  local snap, snap_err = changed_snapshot(cwd, target.scope)
-  if not snap then
-    result.status = "refused"
-    result.error = snap_err
-    return result
+  -- snapshot + review dedup (consults have no review contract: no snapshot,
+  -- no ledger, no fingerprints)
+  local snap, snap_err
+  if kind ~= "consult" then
+    snap, snap_err = changed_snapshot(cwd, target.scope)
+    if not snap then
+      result.status = "refused"
+      result.error = snap_err
+      return result
+    end
+    for _, w in ipairs(snap.warnings or {}) do
+      result.warnings[#result.warnings + 1] = w
+    end
   end
   local state = ledger_for(cwd)
   local files = {}
@@ -683,6 +844,12 @@ local function run_target(ctx, target, invoker, call)
       Ledger.in_flight_pop(state, result._join_key)
     end
     record_ledger(state, spec, files, parsed, cwd)
+  elseif kind == "consult" then
+    -- no ledger, no fingerprints, no iteration bump: the answer is the
+    -- deliverable and comes back as the report
+    result.status = "done"
+    result.summary = res.text and res.text:sub(1, Config.consult_summary_cap) or nil
+    result.raw = res.text
   else
     result.status = "done"
     result.summary = res.text and res.text:sub(1, 2000) or nil
@@ -810,15 +977,19 @@ function M.handle(ctx, input, invoker)
     end
   end
   if has_review then
-    local any_scope = nil
+    local plan_scope, files_scope = nil, nil
     for _, t in ipairs(targets) do
       if t.scope.basis == "plan" then
-        any_scope = t.scope
+        plan_scope = t.scope
+      elseif t.scope.basis == "files" then
+        files_scope = t.scope
       end
     end
     local snap
-    if any_scope then
+    if plan_scope then
       snap = plan_snapshot(cwd)
+    elseif files_scope then
+      snap = files_snapshot(cwd, files_scope)
     else
       snap = changed_snapshot(cwd, { files = {}, basis = "changed" })
     end
@@ -853,6 +1024,17 @@ function M.reviews_lookup(ctx, input)
     local snap = plan_snapshot(cwd)
     if not snap then
       return "error: " .. tostring(snap), true
+    end
+    for _, f in ipairs(snap.files) do
+      paths[#paths + 1] = f.path
+    end
+  elseif basis == "files" then
+    local snap, ferr = files_snapshot(cwd, {
+      files = type(input.files) == "table" and input.files or {},
+      basis = "files",
+    })
+    if not snap then
+      return "error: " .. tostring(ferr), true
     end
     for _, f in ipairs(snap.files) do
       paths[#paths + 1] = f.path
