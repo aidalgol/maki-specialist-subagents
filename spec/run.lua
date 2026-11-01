@@ -17,5 +17,6 @@ require("ledger_spec")
 require("git_spec")
 require("dispatch_spec")
 require("config_spec")
+require("permissions_spec")
 
 H.report()

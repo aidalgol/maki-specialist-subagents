@@ -8,7 +8,7 @@ return {
   type = "implementation",
   description = "Authors unit tests for the pure cores in spec/, runnable with the luau CLI.",
   instructions = "test-engineer.md",
-  model = { tier = "mid" },
+  model = { tier = "medium" },
   thinking = "medium",
   review = { files = { "spec/**" } },
   delegate = { reviews = true },

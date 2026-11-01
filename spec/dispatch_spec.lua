@@ -138,3 +138,27 @@ H.case("policy: kind defaults follow the specialist type", function()
   kind = Dispatch.check_policy({ specialist = "x", brief = "b", kind = "review" }, impl_spec, main)
   H.eq(kind, "review", "explicit kind overrides the type default")
 end)
+
+-- Regression: the recent-finished handoff lives on the plugin-lifetime
+-- State, not on the per-project ledger state (which has no finished table).
+-- The wrong-table version crashed every completing review with
+-- "attempt to index nil with string" at store_finished.
+H.case("finished handoff: stored on State, bounded at MAX_FINISHED", function()
+  Dispatch._store_finished("handoff-regression", { status = "done", verdict = "approve" })
+  local fin = Dispatch._state.finished["handoff-regression"]
+  H.truthy(fin ~= nil, "handoff stored on State.finished")
+  H.eq(fin.result.verdict, "approve")
+  H.eq(type(fin.at), "number")
+  for i = 1, 60 do
+    Dispatch._store_finished("bound-" .. i, { status = "done" })
+  end
+  local n = 0
+  for _ in pairs(Dispatch._state.finished) do
+    n = n + 1
+  end
+  H.truthy(n <= 50, "handoff bounded (got " .. n .. ")")
+  -- cleanup: leave no bound-* entries for later cases
+  for k in pairs(Dispatch._state.finished) do
+    Dispatch._state.finished[k] = nil
+  end
+end)

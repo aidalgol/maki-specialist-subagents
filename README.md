@@ -53,7 +53,7 @@ return {
   -- Optional. Specifies a model tier or exact model. Defaults to the parent
   -- model if unspecified.
   model = {
-    tier = "fast" -- Clamped to the parent's tier.
+    tier = "weak" -- Clamped to the parent's tier.
     -- spec = "..."  -- Pins one model; wins if both tier and spec are set.
   },
 
@@ -210,19 +210,47 @@ the whole pipeline on itself.
 
 ## Permissions guidance
 
-`plugin.toml` grants exactly `agent`, `fs_read`, `fs_write`, `run` — no
-`net`, no `env`. The plugin never widens anyone's authority: no
-pre-approvals, no private execution channels, zero
-`register_permission_rule`, zero `set_prompt`/`set_slot`.
+`plugin.toml` grants exactly `agent`, `fs_read`, `fs_write`, `run`,
+`session_read`, `session_write` — no `net`, no `env`. The plugin never
+widens anyone's authority: no pre-approvals, no private execution channels,
+zero `register_permission_rule`, zero `set_prompt`. The one seam it wraps is
+maki's `permission.prompt` slot, described below: it answers prompts in the
+user's name, it never bypasses a deny.
 
-Sub sessions cannot answer permission prompts — a call that would prompt is
-denied. Give the specialists allow rules for what they run:
+Sub sessions cannot answer permission prompts, so by default a call that
+would prompt is denied. Two mechanisms fill that gap:
+
+**Permission relay (default on; `permission_relay = false` disables).** When
+a specialist sub session's call would prompt — maki fires the
+`permission.prompt` slot for subagent calls too — the plugin opens a small
+window next to the chat input in the parent UI: specialist name and kind,
+tool, command/input, and the scopes the prompt asks about. Keys:
+
+- `y` — allow once: the call runs, no model round trip.
+- `s` — allow for this specialist: remembered in memory until the session
+  closes, so a repeated identical call (same tool, same scopes) runs silent.
+- `n` (or `Esc`) — deny: the sub receives a guidance message and adapts.
+
+The window waits 55 s; if nobody answers (or it cannot open, e.g. under
+`maki -p`), the call is denied with guidance instead of hanging the sub.
+Verdicts record no rules host-side, so relays never persist: allow-always
+answers live only for the session, and `.maki/permissions.toml` remains the
+way to pre-allow recurring commands. Attribution is re-verified against the
+live task list on every relay, so a closed session's cache dies with it.
+Calls from the main session and from other plugins' subagents pass the layer
+untouched, and deny rules and escalated (`ask`) calls never reach it —
+nothing here bypasses a deny.
+
+The plugin holds no `net`, so the layer is skipped for `webfetch`/
+`websearch` prompts: those keep denying. That is deliberate — the relay
+adds no network authority. Pre-allow rules cover the rest:
 
 - file writes by implementation specialists inside the project are
   pre-allowed by maki's builtin `<cwd>/**` rule;
 - add project rules (`.maki/permissions.toml`) for the lint and
   static-analysis commands your review specialists run, e.g.
-  `ruff *`, `npm run lint*`, `cargo check *`.
+  `ruff *`, `npm run lint*`, `cargo check *` — cheaper than answering the
+  relay window on every dispatch.
 
 The plugin's own process execution is a fixed git channel only
 (`status`, `diff`, `rev-parse`, `hash-object` via argv arrays); everything a
@@ -241,6 +269,7 @@ require("specialist_subagents").setup({
   iteration_cap = 3,       -- fix<->re-review rounds per (implementer, reviewer, scope)
   strict_claims = false,   -- reject overlapping path claims instead of warning
   ledger_cap = 500,        -- persisted review ledger entries per project
+  permission_relay = true, -- show specialist permission prompts in the parent UI
 })
 ```
 
@@ -251,8 +280,8 @@ semantically.
 ## Testing
 
 The pure cores (definition validation, ledger semantics, verdict parsing,
-git fingerprints, glob matching, policy checks) are unit-tested without the
-maki host:
+git fingerprints, glob matching, policy checks, permission-relay cache and
+prompt rendering) are unit-tested without the maki host:
 
 ```
 cd <repo root> && lua spec/run.lua
@@ -283,6 +312,11 @@ nested delegation) has a manual checklist:
 
 ## Known host-behaviour notes
 
+- A parallel `targets` fan-out opens one subagent session per target (verified
+  via the log: equal session lifetimes, interleaved API streams). maki's
+  tasks view has shown only one of the concurrent specialist tasks; treat the
+  log or `/specialists` as the source of truth for live invocations until the
+  host UI lists them all.
 - Audience gating (`audiences = { "main" }`) hiding `delegate` from sub
   sessions is verified against maki's documented tool-registry semantics and
   the prompt render; verify once from a live nested session on first use.

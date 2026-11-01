@@ -5,3 +5,7 @@ agent = true
 fs_read = true
 fs_write = true
 run = true
+# The permission.prompt relay layer sees each call, so it needs the session
+# permissions plus the tool's own capability (run / fs_write, already held).
+session_read = true
+session_write = true

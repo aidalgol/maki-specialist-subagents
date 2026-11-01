@@ -11,9 +11,13 @@ names other paths.
   code path that continues is a finding. Tool handlers report failures with
   `{ llm_output = "error: ...", is_error = true }`, never by raising.
 - **Permission declarations.** Every gated call must be covered by
-  `plugin.toml` grants. Flag calls to `maki.fs.*`, `maki.fn.jobstart*`,
-  `maki.agent.session`, `maki.net.*`, or environment access that a grant does
-  not cover, and flag grants that no call justifies.
+  `plugin.toml` grants. Every grant must be justified by a call: the two
+  session grants exist only for the `permission.prompt` slot layer in
+  `permissions.lua` (a layer sees the call, so it costs `session_read` +
+  `session_write` plus the wrapped tool's own capability). Flag calls to
+  `maki.fs.*`, `maki.fn.jobstart*`, `maki.agent.session`, `maki.net.*`,
+  `maki.agent.list`, or environment access that a grant does not cover, and
+  flag grants that no call justifies.
 - **API use.** Signatures follow the documented shapes: `Session:close()` on
   every path (errors, Esc, joins), `pcall(require)` for optional modules,
   `(value, err)` returns, `maki.async` calls only inside coroutines. Flag

@@ -5,7 +5,7 @@ return {
   type = "review",
   description = "Reviews the plugin's privileged surface: trust boundaries, privilege grants, argv/path/state injection, budgets.",
   instructions = "security-engineer.md",
-  model = { tier = "best" },
+  model = { tier = "strong" },
   thinking = "medium",
   review = {
     files = {

@@ -23,8 +23,10 @@ budgets. Do not report convention nits.
 
 ## The checklist
 
-1. **plugin.toml grants exactly `agent`, `fs_read`, `fs_write`, `run`.** No
-   `net`, no `env`. Any addition is a finding that must amend the rule first.
+1. **plugin.toml grants exactly `agent`, `fs_read`, `fs_write`, `run`,
+   `session_read`, `session_write`.** No `net`, no `env`. The two session
+   grants exist solely so the `permission.prompt` layer can see a call (rule
+   6); any other addition is a finding that must amend the rule first.
 2. **Two shell channels, one rule each.**
    - Plugin-internal execution (`maki.fn.jobstart`, `git.lua` only): fixed
      argv arrays, git subcommand allowlist (`status`, `diff`, `rev-parse`,
@@ -44,10 +46,30 @@ budgets. Do not report convention nits.
    instructions and skill names resolve only through documented roots.
 5. **Registry discovery** only loads from the two config-dir
    `lua/specialists/` trees. No eval of tool input, no loads from elsewhere.
-6. **Zero `register_permission_rule`, zero `set_prompt`/`set_slot`.**
-   Catalog guidance goes only through `register_prompt_hint`. The plugin
-   never widens a specialist's authority and never bypasses the user's
-   approval layer.
+6. **Zero `register_permission_rule`, zero `set_prompt`; exactly one wrapped
+   slot: `permission.prompt`** (the relay in `permissions.lua`). The layer is
+   a verdict relay, not an authority grant:
+   - It answers only for callers attributed to this plugin's live specialist
+     sessions, attributed by diffing `maki.task.list` around session open
+     (a ctx-opened sub surfaces there with its session id as the task id;
+     `maki.agent.list` only lists background sessions and must not be used),
+     verified against the same listing before any fallback adoption, and
+     re-verified live on every relay (a dead id is untracked with its cache).
+     Main-session calls and other plugins' subagent calls pass through
+     `prev(req, ctx)` untouched. The plugin-identity check on task entries is
+     an exact allowlist, never a substring match.
+   - Verdicts record no rule: allow is once (`y`) or an in-memory per-session
+     cache keyed on tool + sorted scopes, dropped when the session untracks
+     (`untrack` on the single `Session:close` path). Persistent approvals
+     stay in `.maki/permissions.toml`. Flag any code that persists a relay
+     verdict.
+   - The layer never sees deny rules or escalated (`ask`) calls, and nothing
+     here may bypass a deny — flag any code path that answers a call the
+     user never got to see the prompt for.
+   - The plugin holds no `net`, so `webfetch`/`websearch` prompts skip the
+     layer and keep denying. Do not "fix" that by requesting `net`.
+   - A second `set_slot`, any `declare_slot`, or any other slot wrap is a
+     finding. Catalog guidance goes only through `register_prompt_hint`.
 7. **`audiences = { "main" }` on the orchestrator delegate tool** is the
    chain-bypass guard; nested delegation exists only as `local_tools`
    closures built per invoker policy. Flag any path that hands the

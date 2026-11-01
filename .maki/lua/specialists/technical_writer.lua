@@ -6,7 +6,7 @@ return {
   type = "review",
   description = "Reviews documentation and prose against the red-hat technical writing style.",
   instructions = "technical-writer.md",
-  model = { tier = "fast" },
+  model = { tier = "weak" },
   thinking = "low",
   review = { files = { "**/*.md" } },
   skills = { "red-hat-tech-writing-style" },

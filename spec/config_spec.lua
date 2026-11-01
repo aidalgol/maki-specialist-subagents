@@ -11,6 +11,7 @@ H.case("defaults", function()
   H.eq(Config.iteration_cap, 3)
   H.eq(Config.strict_claims, false)
   H.eq(Config.ledger_cap, 500)
+  H.eq(Config.permission_relay, true)
 end)
 
 H.case("setup merges known keys of matching types and ignores the rest", function()

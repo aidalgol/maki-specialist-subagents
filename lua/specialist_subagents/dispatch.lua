@@ -20,6 +20,7 @@ local Ledger = req("specialist_subagents.ledger", "./ledger")
 local Report = req("specialist_subagents.report", "./report")
 local Registry = req("specialist_subagents.registry", "./registry")
 local SB = req("specialist_subagents.session_builder", "./session_builder")
+local Permissions = req("specialist_subagents.permissions", "./permissions")
 
 local M = {}
 
@@ -259,6 +260,12 @@ local function resolve_review_files(state, target, spec, snap, force_review)
       local entry = nil
       if not force_review then
         entry = Ledger.lookup(state, spec.name, path, f.fingerprint)
+        if entry and not entry.verdict then
+          -- an unparsable review satisfies nothing, the cache included:
+          -- combined_verdict defaults to approve, so a verdict-less cached
+          -- entry would approve unchanged files without any review
+          entry = nil
+        end
       end
       out[#out + 1] = { path = path, fingerprint = f.fingerprint, cached = entry }
       if entry then
@@ -313,7 +320,7 @@ local function join_in_flight(state, key)
     end
     if not rec then
       -- purged: check the recent-finished handoff, else give up
-      local fin = state.finished[key]
+      local fin = State.finished[key]
       if fin and now() - fin.at <= 120 then
         return fin.result, true
       end
@@ -325,19 +332,22 @@ local function join_in_flight(state, key)
   return nil, false
 end
 
-local function store_finished(state, key, result)
-  state.finished[key] = { result = result, at = now() }
+-- Recent-finished handoff for waiters that missed the in-flight window.
+-- Lives on the plugin-lifetime State, never on the per-project ledger state
+-- (which has no finished table).
+local function store_finished(key, result)
+  State.finished[key] = { result = result, at = now() }
   -- bound the table
   local keys = {}
-  for k in pairs(state.finished) do
+  for k in pairs(State.finished) do
     keys[#keys + 1] = k
   end
   if #keys > MAX_FINISHED then
     table.sort(keys, function(a, b)
-      return (state.finished[a].at or 0) < (state.finished[b].at or 0)
+      return (State.finished[a].at or 0) < (State.finished[b].at or 0)
     end)
     for i = 1, #keys - MAX_FINISHED do
-      state.finished[keys[i]] = nil
+      State.finished[keys[i]] = nil
     end
   end
 end
@@ -580,6 +590,13 @@ local function run_target(ctx, target, invoker, call)
 
   -- hold the concurrency slot across open + prompt; released on every path
   State.active = State.active + 1
+  -- Snapshot the chat's subagent tasks before opening, so the new session
+  -- can be attributed for the permission relay. Exact when differently named
+  -- specialists open concurrently; two sessions with the SAME name + kind
+  -- opening between one snapshot and the next can pick up each other's id
+  -- (same meta either way, and adopt()/identify re-verify against the live
+  -- task list before any relay).
+  local listed_before = Permissions.snapshot_ids(ctx)
   local sess, oerr = SB.open_session(ctx, spec, kind, invocation, cwd, local_tools)
   if not sess then
     State.active = math.max(0, State.active - 1)
@@ -593,6 +610,10 @@ local function run_target(ctx, target, invoker, call)
     end
     return result
   end
+
+  -- Attribute the live session so its permission prompts can be relayed to
+  -- the user; untracked on every close path below.
+  local session_key = Permissions.track_new(ctx, listed_before, spec.name, kind)
 
   -- brief: self-contained task + identity + (reviews) changed files + diff
   local brief = table.concat({
@@ -622,6 +643,7 @@ local function run_target(ctx, target, invoker, call)
       res, prompt_err = r_or_err, e2
     end
     pcall(function() sess:close() end)
+    Permissions.untrack(session_key)
     State.active = math.max(0, State.active - 1)
   end
 
@@ -657,7 +679,7 @@ local function run_target(ctx, target, invoker, call)
       if rec then
         rec.result = result
       end
-      store_finished(state, result._join_key, result)
+      store_finished(result._join_key, result)
       Ledger.in_flight_pop(state, result._join_key)
     end
     record_ledger(state, spec, files, parsed, cwd)
@@ -738,11 +760,22 @@ function M.handle(ctx, input, invoker)
   local call = { cwd = cwd, used = 0 }
   local results = {}
 
-  -- fan-out across targets, bounded by max_active
+  -- fan-out across targets, bounded by max_active.
+  --
+  -- NOT maki.async.join: join runs every worker through maki.async.run,
+  -- whose tasks are stopped after 60 seconds. Each specialist killed there
+  -- never fires join's completion callback, so the dispatch hangs forever —
+  -- every review longer than a minute died mid-stream and wedged the tool
+  -- call (observed live: async.run: task failed x3 at +59.9s). gather runs
+  -- the fns as children of this call (cancelled with it, no time cap); the
+  -- semaphore keeps the concurrency bound.
+  local sem = maki.async.semaphore(Config.max_active)
   local fns = {}
   for i, target in ipairs(targets) do
     fns[#fns + 1] = function()
+      local permit = sem:acquire()
       local ok, res = pcall(run_target, ctx, target, invoker, call)
+      permit:release()
       if not ok then
         res = {
           specialist = tostring(target.specialist),
@@ -756,7 +789,7 @@ function M.handle(ctx, input, invoker)
       results[i] = res
     end
   end
-  maki.async.join(Config.max_active, fns)
+  maki.async.gather(fns)
 
   -- compact results into input order
   local ordered = {}
@@ -861,5 +894,6 @@ function M.reviews_lookup(ctx, input)
 end
 
 M._state = State -- exposed for /specialists and tests
+M._store_finished = store_finished -- exposed for tests (finished-handoff wiring)
 
 return M

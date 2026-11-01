@@ -6,9 +6,12 @@
 --   specialist_reviews (tool, all audiences) read-only ledger coverage query
 --   /specialists       (command) catalog + live invocations + coverage view
 --   tool_usage hint    (prompt hint) catalog + delegation guidance
+--   permission.prompt  (slot layer) relays specialist sub permission prompts
+--                      to the user (see lua/specialist_subagents/permissions.lua)
 
 local Config = require("specialist_subagents.config")
 local Dispatch = require("specialist_subagents.dispatch")
+local Permissions = require("specialist_subagents.permissions")
 local Registry = require("specialist_subagents.registry")
 local Report = require("specialist_subagents.report")
 local UI = require("specialist_subagents.ui")
@@ -17,18 +20,34 @@ local M = {}
 
 function M.setup(opts)
   Config.setup(opts)
+  -- Idempotent; also re-run so enabling the relay in setup (after this file
+  -- loaded with it disabled) still installs the layer.
+  Permissions.install()
   return M
 end
 
 -- Eager discovery: a specialist definition that fails to load or validate
--- must stop the plugin here, before any specialist work can start. maki logs
--- the load error at startup and on /reload, and none of the registrations
--- below run, so `delegate`, `specialist_reviews`, the prompt hint, and
--- /specialists are all absent until the definition is fixed.
-local _, _, discovery_errors = Registry.catalog(maki.uv.cwd())
-if #discovery_errors > 0 then
-  error("specialist-subagents: broken specialist definitions:\n  - "
-    .. table.concat(discovery_errors, "\n  - "), 0)
+-- must fail specialist work before anything is dispatched. The check itself
+-- runs deferred: it walks the config dirs with maki.fs.*, which yields, and
+-- init.lua loading cannot yield across the C-call boundary. Failing closed
+-- does not depend on this gate — the delegate handler and the prompt hint
+-- re-run discovery on every use and refuse to dispatch on errors.
+do
+  local function eager_check()
+    local _, _, discovery_errors = Registry.catalog(maki.uv.cwd())
+    if #discovery_errors > 0 then
+      maki.log.error("specialist-subagents: broken specialist definitions:\n  - "
+        .. table.concat(discovery_errors, "\n  - "))
+    end
+  end
+  if type(maki) == "table" and type(maki.defer_fn) == "function" then
+    maki.defer_fn(eager_check, 0)
+  else
+    local ok, err = pcall(eager_check)
+    if not ok then
+      error("specialist-subagents: discovery check failed: " .. tostring(err), 0)
+    end
+  end
 end
 
 local DELEGATE_SCHEMA = {
@@ -195,5 +214,10 @@ maki.api.register_prompt_hint({
     return table.concat(lines, "\n")
   end,
 })
+
+-- The permission relay layer: after the tools above register, per the slot
+-- contract set_slot may also be called before the host slot fires. install()
+-- is idempotent and a no-op when permission_relay is disabled.
+Permissions.install()
 
 return M

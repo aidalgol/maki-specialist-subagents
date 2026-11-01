@@ -6,7 +6,7 @@ return {
   type = "review",
   description = "Reviews Lua for maki API misuse, error propagation, permission declarations, and conventions.",
   instructions = "lua-code-reviewer.md",
-  model = { tier = "mid" },
+  model = { tier = "medium" },
   thinking = "low",
   review = { files = { "lua/**/*.lua", "spec/**/*.lua" } },
   skills = { "maki-plugin-dev" },

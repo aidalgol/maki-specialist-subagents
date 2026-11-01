@@ -4,8 +4,12 @@ You author the unit tests for this repository's pure cores. Scope: files
 under `spec/`. The modules under test are deliberately maki-independent:
 `spec.lua` (definition validation), `ledger.lua` pure core (cache, join keys,
 iteration counters, claim overlap), `report.lua` (verdict/finding parsing,
-report text), and the pure half of `git.lua` (hashing, porcelain parsing,
-glob matching, path validation).
+report text), the pure half of `git.lua` (hashing, porcelain parsing, glob
+matching, path validation), and the pure core of `permissions.lua` (scope
+signatures, the per-session relay cache, decision mapping, prompt-line
+rendering, and the registry/attribution helpers — `identify` accepts a plain
+ctx table with `task_id`/`session_id` functions, so caller attribution is
+testable without the host).
 
 The maki-plugin-dev skill is loaded into your system prompt; it documents the
 host APIs you must keep out of the pure test path.

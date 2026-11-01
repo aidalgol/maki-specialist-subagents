@@ -8,7 +8,9 @@
 -- dispatch handlers, never in prompt text.
 
 local M = {
-  -- Concurrent specialist sessions across one fan-out (maki.async.join bound).
+  -- Concurrent specialist sessions across one fan-out (semaphore bound on
+  -- the gather fan-out; maki.async.join is unusable here, its workers die at
+  -- maki.async.run's 60-second cap).
   max_active = 6,
   -- Specialist dispatches allowed per delegate tool call (every target in a
   -- `targets` list counts).
@@ -29,6 +31,9 @@ local M = {
   ledger_cap = 500,
   -- Iteration-cap bookkeeping entries older than this many seconds expire.
   iteration_ttl = 3600,
+  -- Relay permission prompts from specialist sub sessions to the user in the
+  -- parent UI (permission.prompt layer). Off: sub prompts keep denying.
+  permission_relay = true,
 }
 
 function M.setup(opts)
