@@ -180,8 +180,9 @@ This repository itself also uses the plugin: four specialists under `.maki/`.
 - `security-engineer`
 - `test-engineer`
 
-This means that working on this project with maki installed exercises the whole
-pipeline on itself.
+Because this project's `.maki/` loads the plugin itself, it will clash with a
+global install of the plugin. Temporarily disable loading in your global config
+before launching Maki in this project.
 
 ## Permissions guidance
 
