@@ -203,7 +203,7 @@ local function load_persisted(project_cwd)
   if not ok or not text or text == "" then
     return nil
   end
-  local data = maki.json.decode(text)
+  local data = maki.json.decode(text, { luanil = { object = true, array = true } })
   if type(data) ~= "table" or type(data.entries) ~= "table" then
     return nil
   end

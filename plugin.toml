@@ -2,13 +2,16 @@
 #
 # SPDX-License-Identifier: MIT
 
-min_maki_version = "0.6.5"
+min_maki_version = "0.7.0"
 
 [permissions]
 agent = true
 fs_read = true
 fs_write = true
 run = true
+# No chat-input API is used, and `input` is excluded from holds_all_reach, so
+# denying it cannot affect delegated-reach pricing for subagent sessions.
+input = false
 # The permission.prompt relay layer sees each call, so it needs the session
 # permissions plus the tool's own capability (run / fs_write, already held).
 session_read = true

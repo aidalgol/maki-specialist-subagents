@@ -9,6 +9,196 @@ local lu = require("luaunit")
 local TestLedger = {}
 local Ledger = require("specialist_subagents.ledger")
 
+-- ---------------------------------------------------------------------------
+-- maki stub for the load_state seam
+--
+-- The persistence layer talks to the global `maki` at call time, so the tests
+-- below set _G.maki to a minimal stub and clear it afterwards. The JSON
+-- decoder emulates maki 0.7.0 semantics: JSON null decodes to a truthy
+-- sentinel (maki.NIL) unless the caller passes
+-- { luanil = { object = true, array = true } }.
+-- ---------------------------------------------------------------------------
+
+local NIL_SENTINEL = setmetatable({}, { __tostring = function() return "maki.NIL" end })
+local JSON_NULL = setmetatable({}, { __tostring = function() return "<json null>" end })
+
+local function stub_json_decode(text, opts)
+  local luanil = (opts and opts.luanil) or {}
+  local pos = 1
+
+  local function fail(what)
+    error(string.format("stub_json_decode: %s at byte %d", what, pos), 0)
+  end
+
+  local function skip_ws()
+    local s = text:find("[^ \t\r\n]", pos)
+    pos = s or (#text + 1)
+  end
+
+  local parse_value
+
+  local function parse_string()
+    pos = pos + 1 -- opening quote
+    local out = {}
+    while true do
+      local c = text:sub(pos, pos)
+      if c == "" then
+        fail("unterminated string")
+      elseif c == '"' then
+        pos = pos + 1
+        return table.concat(out)
+      elseif c == "\\" then
+        out[#out + 1] = text:sub(pos + 1, pos + 1)
+        pos = pos + 2
+      else
+        out[#out + 1] = c
+        pos = pos + 1
+      end
+    end
+  end
+
+  -- JSON null -> nil when the matching luanil flag is set, maki.NIL otherwise.
+  -- Each flag applies to its own context, and a top-level null is always the
+  -- sentinel (real maki only honours the flags for members/elements).
+  local function coerce(v, ctx)
+    if v ~= JSON_NULL then
+      return v
+    end
+    if ctx and luanil[ctx] then
+      return nil
+    end
+    return NIL_SENTINEL
+  end
+
+  local function parse_object()
+    pos = pos + 1 -- {
+    local obj = {}
+    skip_ws()
+    if text:sub(pos, pos) == "}" then
+      pos = pos + 1
+      return obj
+    end
+    while true do
+      skip_ws()
+      if text:sub(pos, pos) ~= '"' then
+        fail("expected object key")
+      end
+      local key = parse_string()
+      skip_ws()
+      if text:sub(pos, pos) ~= ":" then
+        fail("expected ':'")
+      end
+      pos = pos + 1
+      local v = coerce(parse_value(), "object")
+      if v ~= nil then
+        obj[key] = v
+      end -- luanil.object: null keys stay absent
+      skip_ws()
+      local c = text:sub(pos, pos)
+      if c == "," then
+        pos = pos + 1
+      elseif c == "}" then
+        pos = pos + 1
+        return obj
+      else
+        fail("expected ',' or '}'")
+      end
+    end
+  end
+
+  local function parse_array()
+    pos = pos + 1 -- [
+    local arr = {}
+    skip_ws()
+    if text:sub(pos, pos) == "]" then
+      pos = pos + 1
+      return arr
+    end
+    while true do
+      local v = coerce(parse_value(), "array")
+      if v ~= nil then
+        arr[#arr + 1] = v
+      end -- luanil.array: null elements leave a hole
+      skip_ws()
+      local c = text:sub(pos, pos)
+      if c == "," then
+        pos = pos + 1
+      elseif c == "]" then
+        pos = pos + 1
+        return arr
+      else
+        fail("expected ',' or ']'")
+      end
+    end
+  end
+
+  parse_value = function()
+    skip_ws()
+    if text:sub(pos, pos) == "{" then
+      return parse_object()
+    end
+    if text:sub(pos, pos) == "[" then
+      return parse_array()
+    end
+    if text:sub(pos, pos) == '"' then
+      return parse_string()
+    end
+    if text:sub(pos, pos + 3) == "null" then
+      pos = pos + 4
+      return JSON_NULL
+    end
+    if text:sub(pos, pos + 3) == "true" then
+      pos = pos + 4
+      return true
+    end
+    if text:sub(pos, pos + 4) == "false" then
+      pos = pos + 5
+      return false
+    end
+    local num = text:match("^%-?%d+%.?%d*[eE]?[+-]?%d*", pos)
+    if num and num ~= "" then
+      pos = pos + #num
+      return tonumber(num)
+    end
+    fail("unexpected character")
+  end
+
+  local v = parse_value()
+  skip_ws()
+  if pos <= #text then
+    fail("trailing garbage")
+  end
+  return v
+end
+
+local function stub_maki(text)
+  return {
+    env = { state_dir = function() return "/fake/state" end },
+    fs = {
+      joinpath = function(...) return table.concat({ ... }, "/") end,
+      read = function() return text end,
+    },
+    json = { decode = stub_json_decode },
+  }
+end
+
+local LEDGER_WITH_NULLS = [[
+{
+  "version": 1,
+  "entries": [
+    {
+      "specialist": "lua-code-reviewer",
+      "path": "a.lua",
+      "fingerprint": "fp1",
+      "verdict": null,
+      "summary": null,
+      "findings": ["hole", null],
+      "ts": 7
+    }
+  ]
+}
+]]
+
 function TestLedger:test_scope_key_order_independent()
   lu.assertEquals(Ledger.scope_key({ "b.lua", "a.lua" }), Ledger.scope_key({ "a.lua", "b.lua" }))
   lu.assertEquals(Ledger.scope_key({}), Ledger.scope_key(nil))
@@ -101,6 +291,39 @@ function TestLedger:test_iteration_key_is_scope_sensitive()
   local a = Ledger.iteration_key("main", "r", { "a.lua" })
   local b = Ledger.iteration_key("main", "r", { "b.lua" })
   lu.assertTrue(a ~= b)
+end
+
+function TestLedger:test_stub_json_decode_emulates_maki_070_null_semantics()
+  local d = stub_json_decode('{"a":null,"b":[1,null]}')
+  lu.assertTrue(d.a ~= nil, "0.7.0 default: JSON null is a truthy sentinel")
+  lu.assertTrue(d.b[2] ~= nil, "0.7.0 default: null array element is a truthy sentinel")
+
+  local d2 = stub_json_decode('{"a":null,"b":[1,null]}', { luanil = { object = true, array = true } })
+  lu.assertNil(d2.a, "luanil.object: null fields decode to nil")
+  lu.assertNil(d2.b[2], "luanil.array: null elements decode to nil")
+  lu.assertEquals(d2.b[1], 1)
+
+  local d3 = stub_json_decode('{"a":null,"b":[1,null]}', { luanil = { object = true } })
+  lu.assertNil(d3.a, "flags are per-context: object null is nil")
+  lu.assertTrue(d3.b[2] ~= nil, "flags are per-context: array null is still the sentinel")
+
+  local top = stub_json_decode("null", { luanil = { object = true, array = true } })
+  lu.assertTrue(top ~= nil, "top-level null is always the sentinel")
+end
+
+function TestLedger:test_load_state_decodes_persisted_nulls_to_nil()
+  _G.maki = stub_maki(LEDGER_WITH_NULLS)
+  local ok, state = pcall(Ledger.load_state, "/proj")
+  _G.maki = nil
+  lu.assertTrue(ok)
+
+  local hit = state.entries[Ledger.entry_key("lua-code-reviewer", "a.lua", "fp1")]
+  lu.assertTrue(hit ~= nil, "entry with null verdict still loads")
+  lu.assertNil(hit.verdict, "null verdict must be nil, not maki.NIL")
+  lu.assertNil(hit.summary, "null summary must be nil, not maki.NIL")
+  lu.assertNil(hit.findings[2], "null findings element must be nil, not maki.NIL")
+  lu.assertEquals(hit.findings[1], "hole")
+  lu.assertEquals(hit.ts, 7)
 end
 
 function TestLedger:test_claims_overlap_prefixes_and_suffixes()
