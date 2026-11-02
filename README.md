@@ -161,12 +161,15 @@ reviews did not already spend.
 
 ## Install
 
-Global config (recommended):
+Global config:
 
 ```lua
 -- ~/.config/maki/init.lua
 maki.pack.add({
-  { src = "https://github.com/<you>/specialist-subagents" },
+  {
+    src = "https://github.com/aidalgol/maki-specialist-subagents",
+    version = "v0.1.0",
+  },
 })
 ```
 
