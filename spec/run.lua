@@ -25,5 +25,6 @@ runner:runSuiteByInstances({
   { "TestReport", require("report_spec") },
   { "TestSessionBuilder", require("session_builder_spec") },
   { "TestSpec", require("spec_spec") },
+  { "TestUi", require("ui_spec") },
 })
 os.exit(runner.result.notSuccessCount == 0 and 0 or 1)

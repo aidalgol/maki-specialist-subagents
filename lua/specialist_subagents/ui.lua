@@ -120,6 +120,20 @@ function M.render(buf, cwd, dispatch_state)
   end
 end
 
+function M.win_opts()
+  return {
+    title = "/specialists",
+    width = "72%",
+    height = "80%",
+    border = "rounded",
+    footer = { { "q", "close" } },
+    keys = { "q", "<Esc>" },
+    -- Claimed `keys` are only valid on unfocused windows: a focused window
+    -- already receives every key, so open_win refuses `keys` without this.
+    focus = false,
+  }
+end
+
 function M.show()
   local cwd = maki.uv.cwd()
   local Dispatch = require("specialist_subagents.dispatch")
@@ -128,14 +142,11 @@ function M.show()
   if not ok then
     buf:line({ { "failed to render: " .. tostring(err), { bold = true } } })
   end
-  local win = maki.ui.open_win(buf, {
-    title = "/specialists",
-    width = "72%",
-    height = "80%",
-    border = "rounded",
-    footer = { { "q", "close" } },
-    keys = { "q", "<Esc>" },
-  })
+  local ok_win, win = pcall(maki.ui.open_win, buf, M.win_opts())
+  if not ok_win then
+    maki.log.error("specialist-subagents: /specialists failed to open its window: " .. tostring(win))
+    return
+  end
   if win then
     maki.async.spawn(function()
       while true do
