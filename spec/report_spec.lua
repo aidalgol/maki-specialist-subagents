@@ -163,6 +163,29 @@ function TestReport:test_format_coverage_empty_input_is_empty()
   lu.assertEquals(Report.format_coverage(nil, nil), "")
 end
 
+-- Two specialists covering one file render on one row, comma-joined, with
+-- each verdict carrying its own (CACHED) suffix. A single-specialist row is
+-- unchanged from the legacy format.
+function TestReport:test_format_coverage_renders_multi_specialist_rows()
+  local text = Report.format_coverage({
+    { path = "a.lua", reviewers = {
+      { specialist = "new-reviewer", verdict = "request-changes" },
+      { specialist = "old-reviewer", verdict = "approve", cached = true },
+    } },
+    { path = "b.lua", reviewers = {
+      { specialist = "solo-reviewer", verdict = "approve" },
+    } },
+  }, nil)
+  lu.assertStrContains(text, "new-reviewer, old-reviewer")
+  lu.assertStrContains(text, "request-changes, approve (CACHED)")
+  lu.assertStrContains(text, "solo-reviewer")
+  lu.assertStrContains(text, "b.lua")
+  -- no format change for the single-specialist case
+  lu.assertTrue(text:find("solo%-reviewer%s+approve\n") ~= nil
+    or text:find("solo%-reviewer%s+approve$") ~= nil
+    or text:find("solo%-reviewer%s+approve") ~= nil)
+end
+
 function TestReport:test_format_aggregate_consult_result_renders_without_review_machinery()
   local long = string.rep("advice ", 800) -- well past any line length, under the 4000 cap
   local text = Report.format_aggregate({

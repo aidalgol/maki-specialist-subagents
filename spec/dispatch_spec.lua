@@ -280,4 +280,158 @@ function TestDispatch:test_policy_consults_are_main_only_but_run_on_both_special
   lu.assertStrContains(err, "main-only")
 end
 
+-- ---------------------------------------------------------------------------
+-- Cached-findings and coverage regressions (plan: comic-positive-buck)
+-- ---------------------------------------------------------------------------
+
+-- A partial cache hit must not replay cached findings: findings are
+-- changeset-level free text stored on every per-file ledger entry, so a
+-- cached finding's subject may be the one file that changed. The warning
+-- and the cached verdicts' coverage contribution must survive.
+function TestDispatch:test_partial_cache_hit_suppresses_cached_findings_but_keeps_warning_and_coverage()
+  local Ledger = require("specialist_subagents.ledger")
+  local state = Ledger.new_state()
+  Ledger.record(state, {
+    specialist = "r", path = "a.lua", fingerprint = "fp-old",
+    verdict = "request-changes",
+    findings = { { text = "stale finding on a.lua" } },
+    ts = 100,
+  })
+  Ledger.record(state, {
+    specialist = "r", path = "b.lua", fingerprint = "fp-b",
+    verdict = "approve", findings = {}, ts = 100,
+  })
+  local snap = { files = {
+    { path = "a.lua", fingerprint = "fp-new" }, -- changed since the review
+    { path = "b.lua", fingerprint = "fp-b" },
+  } }
+  local target = { specialist = "r", kind = "review", scope = { files = {} } }
+  local spec = { name = "r" }
+
+  local files, cached = Dispatch._resolve_review_files(state, target, spec, snap, false)
+  lu.assertEquals(#cached, 1, "the changed file cache-misses")
+  lu.assertEquals(files[1].cached, nil)
+  lu.assertEquals(files[1].path, "a.lua")
+
+  local result = { warnings = {} }
+  Dispatch._apply_partial_cache(result, files, cached)
+  lu.assertEquals(result.findings, nil, "cached findings are not replayed on a partial hit")
+  lu.assertEquals(#result.warnings, 1)
+  lu.assertStrContains(result.warnings[1], "1 of 2 file(s) returned cached verdicts")
+  lu.assertStrContains(result.warnings[1], "approve")
+
+  -- the cached verdict still contributes coverage for the unchanged file
+  _G.maki = {
+    fs = {
+      glob = function() return {} end,
+      normalize = function(p) return p end,
+      joinpath = function(a, b) return a .. "/" .. b end,
+    },
+    env = { config_dir = function() return "/tmp/fake-config" end },
+    uv = { os_homedir = function() return "/tmp/fake-home" end },
+  }
+  local rows, uncovered = Dispatch._coverage_audit("/tmp/cov-test-partial", snap, {
+    { kind = "review", status = "done", specialist = "r", verdict = "approve",
+      cached = true, scope_files = { "b.lua" } },
+  })
+  _G.maki = nil
+  lu.assertEquals(#rows, 2)
+  lu.assertEquals(rows[1].path, "a.lua")
+  lu.assertEquals(rows[1].reviewers, nil, "the changed file has no coverage")
+  lu.assertEquals(rows[2].path, "b.lua")
+  lu.assertEquals(rows[2].reviewers[1].specialist, "r")
+  lu.assertEquals(rows[2].reviewers[1].verdict, "approve")
+  lu.assertEquals(#uncovered, 1, "the changed file is still uncovered")
+  lu.assertEquals(uncovered[1].path, "a.lua")
+end
+
+-- Full cache hit: every file is provably unchanged, so cached findings ARE
+-- replayed (combined_verdict prefixes each finding with its entry's path).
+function TestDispatch:test_full_cache_hit_replays_cached_findings()
+  local verdict, findings = Dispatch._combined_verdict({
+    { path = "a.lua", verdict = "request-changes", findings = { { text = "fix x" } } },
+    { path = "b.lua", verdict = "approve", findings = {} },
+  })
+  lu.assertEquals(verdict, "request-changes")
+  lu.assertEquals(#findings, 1)
+  lu.assertStrContains(findings[1].text, "[a.lua] fix x")
+end
+
+-- A persist failure must not be swallowed: record_ledger warns via the
+-- pipeline's warn_log convention.
+function TestDispatch:test_record_ledger_persist_error_warns()
+  local Ledger = require("specialist_subagents.ledger")
+  local state = Ledger.new_state()
+  local files = { { path = "a.lua", fingerprint = "fp" } }
+  local parsed = { verdict = "approve", findings = {} }
+  local real_persist = Ledger.persist
+  local warnings = {}
+  _G.maki = { log = { warn = function(msg) warnings[#warnings + 1] = msg end } }
+
+  Ledger.persist = function() return nil, "boom" end
+  Dispatch._record_ledger(state, { name = "r" }, files, parsed, "/tmp/cwd")
+  Ledger.persist = real_persist
+  lu.assertEquals(#warnings, 1)
+  lu.assertStrContains(warnings[1], "ledger persist failed: boom")
+
+  -- success path stays silent
+  Ledger.persist = function() return true end
+  Dispatch._record_ledger(state, { name = "r" }, files, parsed, "/tmp/cwd")
+  Ledger.persist = real_persist
+  _G.maki = nil
+  lu.assertEquals(#warnings, 1, "no warning on a successful persist")
+end
+
+-- reviews_lookup must report every specialist that covered a path (newest
+-- first), not only the newest entry, and count files in the summary.
+function TestDispatch:test_reviews_lookup_reports_all_specialists_per_path()
+  local Ledger = require("specialist_subagents.ledger")
+  local state = Ledger.new_state()
+  Ledger.record(state, { specialist = "old-reviewer", path = "a.lua",
+    fingerprint = "fp1", verdict = "approve", ts = 1000 })
+  Ledger.record(state, { specialist = "new-reviewer", path = "a.lua",
+    fingerprint = "fp2", verdict = "request-changes", ts = 2000 })
+  Ledger.record(state, { specialist = "new-reviewer", path = "b.lua",
+    fingerprint = "fp3", verdict = "approve", ts = 2000 })
+  Dispatch._state.ledgers["/tmp/fake-proj"] = state
+  _G.maki = {
+    uv = { cwd = function() return "/tmp/fake-proj" end },
+    fs = {
+      glob = function() return { "/tmp/fake-proj/a.lua" } end,
+      joinpath = function(a, b) return a .. "/" .. b end,
+      normalize = function(p) return p end,
+      read = function() return "content" end,
+    },
+  }
+  local ok, text = pcall(Dispatch.reviews_lookup, nil, { basis = "files", files = { "a.lua" } })
+  _G.maki = nil
+  lu.assertTrue(ok, "reviews_lookup runs: " .. tostring(text))
+  local new_pos = text:find("new-reviewer", 1, true)
+  local old_pos = text:find("old-reviewer", 1, true)
+  lu.assertTrue(new_pos ~= nil, "the newest specialist's row is present")
+  lu.assertTrue(old_pos ~= nil, "the older specialist's row is not shadowed")
+  lu.assertTrue(new_pos < old_pos, "rows are newest first")
+  lu.assertStrContains(text, "request-changes")
+  lu.assertStrContains(text, "approve")
+  lu.assertStrContains(text, "1 of 1 file(s) have ledger coverage") -- summary counts files, not rows
+
+  -- a path with no ledger entries is still reported UNREVIEWED
+  _G.maki = {
+    uv = { cwd = function() return "/tmp/fake-proj" end },
+    fs = {
+      glob = function() return { "/tmp/fake-proj/zzz.lua" } end,
+      joinpath = function(a, b) return a .. "/" .. b end,
+      normalize = function(p) return p end,
+      read = function() return "content" end,
+    },
+  }
+  ok, text = pcall(Dispatch.reviews_lookup, nil, { basis = "files", files = { "zzz.lua" } })
+  _G.maki = nil
+  Dispatch._state.ledgers["/tmp/fake-proj"] = nil
+  lu.assertTrue(ok, "reviews_lookup runs: " .. tostring(text))
+
+  lu.assertStrContains(text, "UNREVIEWED")
+  lu.assertStrContains(text, "0 of 1 file(s) have ledger coverage")
+end
+
 return TestDispatch

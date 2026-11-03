@@ -305,18 +305,36 @@ function M.format_aggregate(results)
 end
 
 -- Review coverage audit: computed coverage table plus UNCOVERED list.
--- `coverage` is an ordered list of { path, specialist, verdict, cached };
+-- `coverage` is an ordered list of rows. A row either carries `reviewers`
+-- (the per-path list of { specialist, verdict, cached } entries collected by
+-- the coverage audit, newest first) or the legacy singular fields
+-- { path, specialist, verdict, cached }.
 -- `uncovered` is a list of { path, suggestion }.
 function M.format_coverage(coverage, uncovered)
   local out = {}
   if coverage and #coverage > 0 then
     out[#out + 1] = "Review coverage:"
     for _, c in ipairs(coverage) do
-      local verdict = c.verdict or "unparsed"
-      if c.cached then
-        verdict = verdict .. " (CACHED)"
+      local specialists, verdicts = {}, {}
+      if c.reviewers then
+        for _, e in ipairs(c.reviewers) do
+          specialists[#specialists + 1] = e.specialist or "-"
+          local v = e.verdict or "unparsed"
+          if e.cached then
+            v = v .. " (CACHED)"
+          end
+          verdicts[#verdicts + 1] = v
+        end
+      else
+        specialists[1] = c.specialist or "-"
+        local v = c.verdict or "unparsed"
+        if c.cached then
+          v = v .. " (CACHED)"
+        end
+        verdicts[1] = v
       end
-      out[#out + 1] = string.format(" %-46s %-24s %s", c.path, c.specialist or "-", verdict)
+      out[#out + 1] = string.format(" %-46s %-24s %s",
+        c.path, table.concat(specialists, ", "), table.concat(verdicts, ", "))
     end
   end
   if uncovered and #uncovered > 0 then

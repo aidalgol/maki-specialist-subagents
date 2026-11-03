@@ -528,7 +528,25 @@ local function record_ledger(state, spec, files, parsed, cwd)
       ts = ts,
     }, Config.ledger_cap)
   end
-  Ledger.persist(state, cwd)
+  local _, perr = Ledger.persist(state, cwd)
+  if perr then
+    -- the review already happened; losing its ledger entries silently would
+    -- only surface later as surprise re-reviews
+    warn_log("ledger persist failed: " .. tostring(perr))
+  end
+end
+
+-- Partial cache hit: keep the cached verdicts' contribution to the warning
+-- (and to coverage, via the cached entries the caller keeps), but do NOT
+-- replay cached findings into the result. Findings are changeset-level free
+-- text stored on every per-file ledger entry, so a cached finding's subject
+-- may well be the one file that changed — a partial hit cannot prove
+-- otherwise. Only a full-cache hit (every file's content unchanged since the
+-- review, checked above) makes replay sound.
+local function apply_partial_cache(result, files, cached_entries)
+  local cv = combined_verdict(cached_entries)
+  result.warnings[#result.warnings + 1] = string.format(
+    "%d of %d file(s) returned cached verdicts (%s)", #cached_entries, #files, cv)
 end
 
 local function Spec_cap(spec)
@@ -678,13 +696,7 @@ local function run_target(ctx, target, invoker, call)
     end
     -- partial cache: review only the unresolved subset, attach cached verdicts
     if #cached_entries > 0 then
-      local cv, cf = combined_verdict(cached_entries)
-      result.warnings[#result.warnings + 1] = string.format(
-        "%d of %d file(s) returned cached verdicts (%s)", #cached_entries, #files, cv)
-      for _, f in ipairs(cf) do
-        result.findings = result.findings or {}
-        result.findings[#result.findings + 1] = f
-      end
+      apply_partial_cache(result, files, cached_entries)
     end
 
     -- in-flight join per (specialist, file-set, fingerprint)
@@ -873,11 +885,21 @@ end
 -- ---------------------------------------------------------------------------
 
 local function coverage_audit(cwd, snap, results)
+  -- One path can be covered by several specialists in a single fan-out;
+  -- collect them per path instead of last-writer-wins. Iterating in reverse
+  -- puts later-dispatched targets first, the nearest thing to "newest first"
+  -- the aggregate result list has (the ts-ordered view is reviews_lookup).
   local covered = {}
-  for _, r in ipairs(results) do
+  for i = #results, 1, -1 do
+    local r = results[i]
     if r.kind == "review" and r.status == "done" then
       for _, p in ipairs(r.scope_files) do
-        covered[p] = { specialist = r.specialist, verdict = r.verdict, cached = r.cached }
+        local list = covered[p]
+        if not list then
+          list = {}
+          covered[p] = list
+        end
+        list[#list + 1] = { specialist = r.specialist, verdict = r.verdict, cached = r.cached }
       end
     end
   end
@@ -890,9 +912,7 @@ local function coverage_audit(cwd, snap, results)
       local c = covered[f.path]
       rows[#rows + 1] = {
         path = f.path,
-        specialist = c and c.specialist or nil,
-        verdict = c and c.verdict or nil,
-        cached = c and c.cached or false,
+        reviewers = c, -- nil when uncovered: a path is uncovered only when no specialist covered it
       }
       if not c then
         uncovered[#uncovered + 1] = {
@@ -1057,20 +1077,34 @@ function M.reviews_lookup(ctx, input)
   local out = { "Review coverage per file (from the persisted ledger):" }
   local covered = 0
   for _, path in ipairs(paths) do
-    local best = nil
+    -- All specialists that covered the path, newest first: one row per
+    -- (path, specialist), so a second specialist's coverage is not shadowed
+    -- by a newer entry from the first. Repeat reviews by the same specialist
+    -- keep only that specialist's newest entry.
+    local newest_per_specialist = {}
     for _, key in ipairs(state.order) do
       local e = state.entries[key]
       if e and e.path == path then
-        if not best or (e.ts or 0) > (best.ts or 0) then
-          best = e
+        local cur = newest_per_specialist[e.specialist]
+        if not cur or (e.ts or 0) > (cur.ts or 0) then
+          newest_per_specialist[e.specialist] = e
         end
       end
     end
-    if best then
+    local hits = {}
+    for _, e in pairs(newest_per_specialist) do
+      hits[#hits + 1] = e
+    end
+    if #hits > 0 then
       covered = covered + 1
-      local age = best.ts and (os.time() - best.ts) or "?"
-      out[#out + 1] = string.format(" %-46s %-24s %-16s (%ds ago)",
-        path, best.specialist, best.verdict or "unparsed", age)
+      table.sort(hits, function(a, b)
+        return (a.ts or 0) > (b.ts or 0)
+      end)
+      for _, e in ipairs(hits) do
+        local age = e.ts and (os.time() - e.ts) or "?"
+        out[#out + 1] = string.format(" %-46s %-24s %-16s (%ds ago)",
+          path, e.specialist, e.verdict or "unparsed", age)
+      end
     else
       out[#out + 1] = string.format(" %-46s %-24s %s", path, "-", "UNREVIEWED")
     end
@@ -1082,5 +1116,9 @@ end
 M._state = State -- exposed for /specialists and tests
 M._store_finished = store_finished -- exposed for tests (finished-handoff wiring)
 M._resolve_review_files = resolve_review_files -- exposed for tests (cache-miss rule)
+M._record_ledger = record_ledger -- exposed for tests (persist-failure warning)
+M._combined_verdict = combined_verdict -- exposed for tests (full-cache findings replay)
+M._apply_partial_cache = apply_partial_cache -- exposed for tests (partial-hit findings suppression)
+M._coverage_audit = coverage_audit -- exposed for tests (multi-specialist coverage)
 
 return M
