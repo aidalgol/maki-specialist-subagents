@@ -220,9 +220,12 @@ before launching Maki in this project.
 
 ## Permissions guidance
 
-`plugin.toml` grants exactly `agent`, `fs_read`, `fs_write`, `run`,
-`session_read`, `session_write` — no `net`, no `env`. The plugin never
-widens anyone's authority: no pre-approvals, no private execution channels,
+`plugin.toml` grants exactly `agent`, `fs_read`, `fs_write`, `run`, `net`,
+`session_read`, `session_write` — no `env`. `net` exists only so specialists
+can be handed the native `webfetch`/`websearch` tools and the permission
+relay can see their prompts; the plugin itself makes no network calls and
+records no permission rules. The plugin never widens anyone's authority:
+no pre-approvals, no private execution channels,
 zero `register_permission_rule`, zero `set_prompt`. The one seam it wraps is
 maki's `permission.prompt` slot, described below: it answers prompts in the
 user's name, it never bypasses a deny.
@@ -254,16 +257,20 @@ Calls from the main session and from other plugins' subagents pass the layer
 untouched, and deny rules and escalated (`ask`) calls never reach it —
 nothing here bypasses a deny.
 
-The plugin holds no `net`, so the layer is skipped for `webfetch`/
-`websearch` prompts: those keep denying. That is deliberate — the relay
-adds no network authority. Pre-allow rules cover the rest:
+The plugin holds `net`, so `webfetch`/`websearch` calls relay like any other
+prompted call: with no project rule, the relay window appears; whether web
+tools are allowed in a project is decided by its Maki permission rules.
+Pre-allow rules cover the rest:
 
 - file writes by implementation specialists inside the project are
   pre-allowed by maki's builtin `<cwd>/**` rule;
 - add project rules (`.maki/permissions.toml`) for the lint and
   static-analysis commands your review specialists run, e.g.
   `ruff *`, `npm run lint*`, `cargo check *` — cheaper than answering the
-  relay window on every dispatch.
+  relay window on every dispatch;
+- to block web tools in a project, add deny rules for `webfetch`/`websearch`
+  (or simply never allow them); to silence the relay for frequent fetches,
+  pre-allow e.g. `webfetch *`.
 
 The plugin's own process execution is a fixed git channel only
 (`status`, `diff`, `rev-parse`, `hash-object` via argv arrays); everything a

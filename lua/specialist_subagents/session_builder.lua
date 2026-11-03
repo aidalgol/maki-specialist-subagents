@@ -7,12 +7,14 @@
 -- delegate local tool.
 --
 -- Grant-vs-toolset accounting: the plugin holds exactly agent, fs_read,
--- fs_write, run. Tools that cost more than that are excluded from every
+-- fs_write, run, net. Tools that cost more than that are excluded from every
 -- specialist session: `batch`/`code_execution` (declare no permission, so
 -- they cost every permission except agent) and `task` (hands over the whole
--- chat, all five). `question` is interactive-only. If maki still refuses to
+-- chat, every permission). `question` is interactive-only. If maki still refuses to
 -- open a session because a handed-over tool's bank exceeds our grants, the
--- builder retries with the over-cost tools dropped.
+-- builder retries with the over-cost tools dropped. The plugin holds `net`,
+-- so the native `webfetch`/`websearch` tools are handed over like any other
+-- tool; whether web calls are allowed is maki's permission machinery.
 local function req(dotted, sibling)
   local ok, mod = pcall(require, dotted)
   if ok and mod then
@@ -29,7 +31,7 @@ local M = {}
 local NEVER = {
   batch = "container costs every permission the plugin does not hold",
   code_execution = "container costs every permission the plugin does not hold",
-  task = "hands over the whole chat (all five grants)",
+  task = "hands over the whole chat (every permission)",
   question = "interactive; sub sessions have no answerer",
   delegate = "the orchestrator tool; nested delegation uses generated local tools",
   specialist_reviews = "orchestrator-side ledger query",
@@ -45,8 +47,9 @@ local REVIEW_DEFAULT_TOOLS = {
 }
 
 -- Tools whose declared permission exceeds the plugin's grants; dropped
--- first when a session open fails on permissions.
-local OVER_COST = { "webfetch", "websearch", "batch", "code_execution", "task" }
+-- first when a session open fails on permissions. The plugin holds `net`,
+-- so the native webfetch/websearch tools are not over-cost.
+local OVER_COST = { "batch", "code_execution", "task" }
 local function clamp_tool_names(defs, allowed)
   local out = {}
   for _, def in ipairs(defs) do

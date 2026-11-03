@@ -30,9 +30,13 @@ budgets. Do not report convention nits.
 ## The checklist
 
 1. **plugin.toml grants exactly `agent`, `fs_read`, `fs_write`, `run`,
-   `session_read`, `session_write`.** No `net`, no `env`. The two session
-   grants exist solely so the `permission.prompt` layer can see a call (rule
-   6); any other addition is a finding that must amend the rule first.
+   `net`, `session_read`, `session_write`.** No `env`. `net` exists only so
+   specialist sessions can be handed the native `webfetch`/`websearch`
+   tools and the `permission.prompt` layer can see their prompts (rule 6):
+   the plugin itself must make no network calls and record no permission
+   rules. The two session grants exist solely so the layer can see a call
+   (rule 6); any other addition is a finding that must amend the rule
+   first.
 2. **Two shell channels, one rule each.**
    - Plugin-internal execution (`maki.fn.jobstart`, `git.lua` only): fixed
      argv arrays, git subcommand allowlist (`status`, `diff`, `rev-parse`,
@@ -77,8 +81,10 @@ budgets. Do not report convention nits.
    - The layer never sees deny rules or escalated (`ask`) calls, and nothing
      here may bypass a deny — flag any code path that answers a call the
      user never got to see the prompt for.
-   - The plugin holds no `net`, so `webfetch`/`websearch` prompts skip the
-     layer and keep denying. Do not "fix" that by requesting `net`.
+   - The plugin holds `net` so `webfetch`/`websearch` prompts reach the
+     layer. Flag any plugin code that calls the network itself, vets or
+     wraps web tool inputs, or pre-allows web tools — a `net` grant buys
+     reachability only; allow/deny stays with maki's permission machinery.
    - A second `set_slot`, any `declare_slot`, or any other slot wrap is a
      finding. Catalog guidance goes only through `register_prompt_hint`.
 7. **`audiences = { "main" }` on the orchestrator delegate tool** is the

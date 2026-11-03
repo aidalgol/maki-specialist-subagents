@@ -9,10 +9,15 @@ agent = true
 fs_read = true
 fs_write = true
 run = true
+# Held so specialists can be handed the native `webfetch`/`websearch` tools
+# and the permission relay can pay their capability. The plugin itself makes
+# no network calls and records no permission rules; whether web tools are
+# allowed in a project is decided by its Maki permission rules and prompts.
+net = true
 # No chat-input API is used, and `input` is excluded from holds_all_reach, so
 # denying it cannot affect delegated-reach pricing for subagent sessions.
 input = false
 # The permission.prompt relay layer sees each call, so it needs the session
-# permissions plus the tool's own capability (run / fs_write, already held).
+# permissions plus the tool's own capability (run / fs_write / net, held).
 session_read = true
 session_write = true

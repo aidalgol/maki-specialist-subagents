@@ -24,9 +24,10 @@
 -- stay in `.maki/permissions.toml`.
 --
 -- Cost: the layer sees the call, so it pays `session_read` + `session_write`
--- plus the tool's own capability (`run` for bash, `fs_write` for write/edit).
--- The plugin holds no `net`, so `webfetch`/`websearch` prompts skip the layer
--- and keep denying — a feature: no network authority is added.
+-- plus the tool's own capability (`run` for bash, `fs_write` for write/edit,
+-- `net` for webfetch/websearch). The plugin holds `net`, so web-tool prompts
+-- go through the relay like any other prompted call; whether web tools are
+-- allowed in a project is decided by its Maki permission rules and prompts.
 
 local function req(dotted, sibling)
   local ok, mod = pcall(require, dotted)
