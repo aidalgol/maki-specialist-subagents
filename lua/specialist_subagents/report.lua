@@ -349,5 +349,68 @@ function M.format_coverage(coverage, uncovered)
   end
   return table.concat(out, "\n")
 end
+-- Background dispatch receipt: returned by the tool call immediately, while
+-- the fan-out runs in a spawned task. `refused` lists targets rejected by
+-- the synchronous validation pass (they never opened a session).
+function M.format_receipt(dispatch_id, targets, refused)
+  local names = {}
+  for _, t in ipairs(targets) do
+    names[#names + 1] = tostring(t.specialist) .. "(" .. tostring(t.kind or "?") .. ")"
+  end
+  local out = {
+    string.format("Background dispatch %s started: %d specialist(s): %s.",
+      dispatch_id, #targets, table.concat(names, ", ")),
+    "Results arrive as a message when the dispatch completes; do not re-dispatch "
+      .. "(the review ledger dedups and joins identical reviews anyway).",
+    "delegate { action = \"status\", dispatch = \"" .. dispatch_id .. "\" } checks progress; "
+      .. "action = \"message\" / \"stop\" reach the running specialists.",
+  }
+  for _, r in ipairs(refused or {}) do
+    out[#out + 1] = "Refused at validation: " .. r.specialist .. " -- " .. tostring(r.error)
+  end
+  return table.concat(out, "\n")
+end
+
+-- `action = "status"` over running dispatches (oldest first).
+function M.format_status(entries, now_t)
+  if not entries or #entries == 0 then
+    return "No running specialist dispatches."
+  end
+  local out = { string.format("Running specialist dispatches: %d", #entries) }
+  for _, e in ipairs(entries) do
+    local elapsed = now_t and e.started_at and math.max(0, now_t - e.started_at) or nil
+    local head = string.format(" %s (%s%s", e.id, e.background and "background, " or "",
+      elapsed and (elapsed .. "s") or "elapsed ?")
+    local parts = {}
+    for _, t in ipairs(e.targets) do
+      parts[#parts + 1] = string.format("%s(%s) %s", t.specialist, t.kind or "?", t.status or "?")
+    end
+    out[#out + 1] = head .. "): " .. table.concat(parts, ", ")
+  end
+  return table.concat(out, "\n")
+end
+
+-- `action = "message" | "stop"` result: per-specialist outcome rows.
+-- A row: { dispatch, specialist, kind, ok, detail }.
+function M.format_action_result(action, rows)
+  local verb = action == "message" and "Message" or "Stop"
+  local ok_n, fail_n = 0, 0
+  local out = {}
+  for _, r in ipairs(rows or {}) do
+    if r.ok then
+      ok_n = ok_n + 1
+    else
+      fail_n = fail_n + 1
+    end
+    out[#out + 1] = string.format(" - %s %s(%s): %s",
+      r.dispatch, r.specialist, r.kind or "?", r.ok and tostring(r.detail)
+        or "refused (" .. tostring(r.detail) .. ")")
+  end
+  local head = string.format("%s result: %d delivered, %d not delivered", verb, ok_n, fail_n)
+  if #out == 0 then
+    return head .. " (no matched specialist sessions)"
+  end
+  return head .. "\n" .. table.concat(out, "\n")
+end
 
 return M

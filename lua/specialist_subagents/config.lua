@@ -46,6 +46,12 @@ local M = {
   -- Relay permission prompts from specialist sub sessions to the user in the
   -- parent UI (permission.prompt layer). Off: sub prompts keep denying.
   permission_relay = true,
+  -- Allow `background = true` dispatches: the delegate call returns a
+  -- receipt immediately and the aggregated report is delivered as a message
+  -- (maki.session.notify, wake = true) when the fan-out completes. The run
+  -- lives in maki.async.spawn, which outlives the tool call — hence the
+  -- kill switch.
+  allow_background = true,
 }
 
 function M.setup(opts)

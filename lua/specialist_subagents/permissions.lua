@@ -409,6 +409,12 @@ end
 -- The prompt window itself. Returns (decision | nil, guidance | nil): a
 -- decision table on an answer, nil + guidance on timeout / close / failure.
 -- Runs only inside maki (layer body); errors are caught by ask_user.
+--
+-- While the window is open the status bar shows the y/s/n keys
+-- (maki.ui.set_status_hint), cleared on every exit path. The call is
+-- pcall-guarded: if it ever turns out to be permission-gated, the window
+-- simply runs without the hints — this plugin does not grant `input` for a
+-- cosmetic hint.
 function M.prompt_window(entry, req, sig)
   local lines = M.prompt_spans(entry, req)
   lines[#lines + 1] = ""
@@ -433,32 +439,45 @@ function M.prompt_window(entry, req, sig)
     return nil, M.GUIDANCE_OPEN_FAILED .. " (" .. tostring(werr) .. ")"
   end
 
+  local function clear_hints()
+    pcall(function() maki.ui.set_status_hint(nil) end)
+  end
+  pcall(function()
+    maki.ui.set_status_hint({ { "y", "allow" }, { "s", "always" }, { "n", "deny" } })
+  end)
+
   local deadline = os.time() + RELAY_WINDOW_S
   while true do
     if os.time() >= deadline then
       win:close()
+      clear_hints()
       return nil, M.GUIDANCE_TIMEOUT
     end
     local ev = win:recv(RECV_SLICE_MS)
     if ev == nil then
       win:close()
+      clear_hints()
       return nil, M.GUIDANCE_CLOSED
     end
     if ev.type == "close" then
       -- closed externally (channel may already be down; close is idempotent
       -- in effect here since we return immediately after)
+      clear_hints()
       return nil, M.GUIDANCE_CLOSED
     end
     if ev.type == "key" then
       if ev.key == "y" then
         win:close()
+        clear_hints()
         return { decision = "allow" }, nil
       elseif ev.key == "s" then
         win:close()
+        clear_hints()
         M.cache_store(entry.cache, sig)
         return { decision = "allow" }, nil
       elseif ev.key == "n" or ev.key == "<Esc>" then
         win:close()
+        clear_hints()
         return { decision = "deny", guidance = M.GUIDANCE_DENY }, nil
       end
       -- any other key: ignored, the window keeps waiting
@@ -470,6 +489,9 @@ end
 function M.ask_user(entry, req, sig)
   local ok, decision, guidance = pcall(M.prompt_window, entry, req, sig)
   if not ok then
+    -- an error escaping the window loop (recv failure etc.) must not leave
+    -- the status hint implying a pending permission decision
+    pcall(function() maki.ui.set_status_hint(nil) end)
     return nil, M.GUIDANCE_OPEN_FAILED
   end
   return decision, guidance

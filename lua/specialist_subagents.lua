@@ -87,6 +87,23 @@ local DELEGATE_SCHEMA = {
       type = "boolean",
       description = "Re-run a review even when every file in scope already has a fresh ledger entry.",
     },
+    background = {
+      type = "boolean",
+      description = "Run this dispatch in the background: the tool call returns a receipt immediately and the aggregated report arrives as a message when the fan-out completes (main-only; refused without a task UI, e.g. under `maki -p`).",
+    },
+    action = {
+      type = "string",
+      enum = { "status", "message", "stop" },
+      description = "Operate on in-flight dispatches instead of dispatching: \"status\" lists them with per-specialist state; \"message\" queues text to each matched specialist's live session (main-only, needs text); \"stop\" closes the matched live sessions so their prompts return as cancelled (main-only).",
+    },
+    dispatch = {
+      type = "string",
+      description = "With action: target one dispatch id (from a background receipt). Default: all in-flight dispatches from this session.",
+    },
+    text = {
+      type = "string",
+      description = "With action = \"message\": the message delivered to each matched specialist session.",
+    },
     targets = {
       type = "array",
       description = "Parallel fan-out form: one pipeline run per entry, bounded by max_active, one aggregated report.",
@@ -118,7 +135,7 @@ maki.api.register_tool({
 
 Use it to delegate reviews of a change set (reviews are content-addressed: unchanged content returns the recorded verdict instantly, and an identical in-flight review is joined instead of duplicated), to delegate implementation tasks to implementation-type specialists, and — with kind = "consult" — to ask a specialist a question (main-only; no review contract, nothing recorded). Every dispatch runs a harness pipeline: cycle/depth/allowlist policy, budgets, path claims, and a review ledger shared across the session.
 
-Prefer one `targets` call over several sequential ones when several independent specialists apply.]],
+Prefer one `targets` call over several sequential ones when several independent specialists apply. For long fan-outs, `background = true` returns a receipt immediately and delivers the aggregate report as a message when done — do not re-dispatch in the meantime; `action` ("status"/"message"/"stop") queries or reaches the specialists of in-flight dispatches.]],
   schema = DELEGATE_SCHEMA,
   audiences = { "main" },
   permission = "agent",
@@ -126,12 +143,18 @@ Prefer one `targets` call over several sequential ones when several independent 
   annotation = "specialists",
   header = function(input)
     local names = {}
-    if type(input) == "table" and type(input.targets) == "table" then
+    if type(input) == "table" and input.action then
+      names[1] = "action=" .. tostring(input.action)
+        .. (type(input.dispatch) == "string" and (" " .. input.dispatch) or "")
+    elseif type(input) == "table" and type(input.targets) == "table" then
       for _, t in ipairs(input.targets) do
         names[#names + 1] = tostring(t.specialist or "?")
       end
     elseif type(input) == "table" and input.specialist then
       names[1] = tostring(input.specialist)
+    end
+    if type(input) == "table" and input.background == true then
+      names[#names + 1] = "background"
     end
     local buf = maki.ui.buf()
     buf:line({ { "delegate ", "tool" }, { table.concat(names, ", "), "dim" } })
@@ -210,6 +233,7 @@ maki.api.register_prompt_hint({
       "- Resolve a report's UNCOVERED lines (changed files no dispatched scope covered) before declaring a review pass; `specialist_reviews` shows prior coverage cheaply.",
       "- Fix<->re-review rounds are capped per specialist and scope; change the content or accept the findings instead of re-dispatching.",
       "- Task dispatches to implementation specialists record path claims; overlapping claims warn (or refuse under strict_claims).",
+      "- Long fan-outs can run in the background: background = true returns a receipt immediately and the aggregate report arrives as a message — do not re-dispatch (the ledger dedups and joins anyway). action = \"status\"/\"message\"/\"stop\" operates on in-flight dispatches.",
       "- To review explicit working-tree content (e.g. a clean tree), use scope.basis = \"files\" with explicit paths/globs instead of filtering changed files.",
       "- When you need judgement rather than a diff review, consult instead of forcing a review: kind = \"consult\" asks a specialist a question (main-only; no review contract, nothing recorded).",
     }, "\n")

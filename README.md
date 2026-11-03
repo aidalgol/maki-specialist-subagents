@@ -16,7 +16,7 @@ safe instead of forbidden.
 
 | Tool / command | Audience | Purpose |
 |---|---|---|
-| `delegate` | main only | Dispatch specialists: one scalar dispatch, or a `targets` list that fans out in parallel and returns one aggregated report. |
+| `delegate` | main only | Dispatch specialists: one scalar dispatch, or a `targets` list that fans out in parallel and returns one aggregated report. `background = true` runs the dispatch in the background; `action` queries or reaches in-flight dispatches. |
 | `specialist_reviews` | main + subs | Read-only ledger query: which changed files already have review coverage. |
 | `/specialists` | user | Catalog, live invocations, recent coverage. |
 | prompt hint (`tool_usage`) | main | Fresh catalog plus delegation guidance, rebuilt every run. |
@@ -143,6 +143,39 @@ toolset, minus interactive tools, plus the nested `delegate` local tool per the
 `delegate` policy. `batch`, `code_execution`, and `task` are always excluded
 (their permission cost exceeds this plugin's grants).
 
+## Background dispatches and in-flight actions
+
+A review fan-out can run long. `background = true` on a `delegate` call
+(scalar or `targets` form) returns a receipt immediately: the dispatch id
+(`bg-<n>`, e.g. `bg-3`), the specialists involved, and any targets refused at
+validation. The fan-out then runs in a task that outlives the tool call, and
+when it completes the aggregated report — the same aggregate and review
+coverage audit a synchronous call returns — is delivered to the session as a
+message (via `maki.session.notify` with `wake = true`), so the model's next
+turn reads it without the user doing anything.
+
+Do not re-dispatch while a background dispatch runs: the review ledger
+deduplicates unchanged content and joins identical in-flight reviews anyway.
+
+Background dispatches are main-only: a nested delegate's call must stay
+synchronous so its result reaches the specialist's own report. They are
+disabled when `allow_background = false`. They are also refused without a
+task UI (e.g. under `maki -p`), where there is no session to wake — the
+error says to dispatch synchronously.
+
+While a dispatch runs, `action` operates on its specialists instead of
+dispatching new work:
+
+| `action` | Effect |
+|---|---|
+| `status` | List the in-flight dispatches from this session: ids, elapsed time, and per-specialist state. Read-only, allowed from any invoker. |
+| `message` | Queue `text` to each matched specialist's live session via `Session:send`; it lands at the sub's next turn boundary as an interrupt from its parent. Main-only. |
+| `stop` | Close each matched live session, so its blocked prompt returns as cancelled and the normal failure path releases claims and in-flight ledger keys. Main-only. |
+
+The `dispatch` option targets one dispatch by id (from a receipt). Without
+it, the action applies to every in-flight dispatch opened from this session;
+an explicit id from another session does not match.
+
 ## The AGENTS.md gate recipe
 
 Put this in your project's AGENTS.md (or instructions) to make the gate
@@ -208,6 +241,9 @@ tool, command/input, and the scopes the prompt asks about. Keys:
   closes, so a repeated identical call (same tool, same scopes) runs silent.
 - `n` (or `Esc`) — deny: the sub receives a guidance message and adapts.
 
+While the window is open the status bar shows the `y` / `s` / `n` keys
+(`maki.ui.set_status_hint`), cleared when the window closes or times out.
+
 The window waits 55 s; if nobody answers (or it cannot open, e.g. under
 `maki -p`), the call is denied with guidance instead of hanging the sub.
 Verdicts record no rules host-side, so relays never persist: allow-always
@@ -247,6 +283,7 @@ require("specialist_subagents").setup({
   strict_claims = false,   -- reject overlapping path claims instead of warning
   ledger_cap = 500,        -- persisted review ledger entries per project
   permission_relay = true, -- show specialist permission prompts in the parent UI
+  allow_background = true, -- allow background delegate calls (receipt now, report as a message)
 })
 ```
 
@@ -284,8 +321,23 @@ manual testing.
    refusal from the harness, not from a prompt.
 6. Run two identical reviews concurrently from two calls — expect one
    `JOINED IN-FLIGHT SESSION` result.
-7. Break a definition (introduce a syntax error, for example), `/reload`, and
+7. Ask for a background review fan-out (`background = true`); confirm the
+   receipt names a `bg-<n>` id and arrives immediately, the aggregate report
+   lands as a message, the ledger records the verdicts, and a repeat review
+   is a cache hit. Check `/tasks` shows the backgrounded specialists and
+   that permission-relay attribution still works.
+8. While it runs: `action = "status"` lists the dispatch with per-specialist
+   state; `action = "message"` with `text` queues to a running specialist
+   (visible in its transcript); `action = "stop"` closes the live sessions
+   and the original receipt's dispatch finishes with `cancelled` results,
+   claims released. Confirm `maki -p` refuses `background = true` with a
+   clear error, and that a nested/implementation delegate sending
+   `background = true` is refused.
+9. Break a definition (introduce a syntax error, for example), `/reload`, and
    confirm maki logs a plugin-load error that names the file and the reason
    while `delegate` is absent; fix the definition, `/reload`, and confirm the
    tool registers again. A definition that only warns (a `model.tier` next to
    a `model.spec`, or an unknown key) still loads the plugin.
+10. In a non-YOLO session, trigger a specialist permission relay window;
+    confirm the status bar shows the y/s/n hints, and that they clear on
+    both an answer and the 55 s timeout.

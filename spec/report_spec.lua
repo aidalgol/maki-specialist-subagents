@@ -200,4 +200,64 @@ function TestReport:test_format_aggregate_consult_result_renders_without_review_
   lu.assertEquals(text:find("UNCOVERED", 1, true), nil, "no coverage audit for consults")
 end
 
+-- ---------------------------------------------------------------------------
+-- Background receipts, status, and action results (plan: refined-casual-grouse)
+-- ---------------------------------------------------------------------------
+
+function TestReport:test_format_receipt_lists_specialists_and_do_not_redispatch()
+  local text = Report.format_receipt("bg-3", {
+    { specialist = "lua-code-reviewer", kind = "review" },
+    { specialist = "security-engineer", kind = "review" },
+  }, {})
+  lu.assertStrContains(text, "bg-3")
+  lu.assertStrContains(text, "lua-code-reviewer(review)")
+  lu.assertStrContains(text, "security-engineer(review)")
+  lu.assertStrContains(text, "do not re-dispatch")
+  lu.assertStrContains(text, "arrive as a message")
+end
+
+function TestReport:test_format_receipt_lists_validation_refusals()
+  local text = Report.format_receipt("bg-9", {
+    { specialist = "a", kind = "review" },
+  }, { { specialist = "b", status = "refused", error = "unknown specialist: b" } })
+  lu.assertStrContains(text, "Refused at validation: b -- unknown specialist: b")
+  lu.assertStrContains(text, "1 specialist(s)")
+end
+
+function TestReport:test_format_status_empty_and_populated()
+  lu.assertEquals(Report.format_status(nil), "No running specialist dispatches.")
+  lu.assertEquals(Report.format_status({}), "No running specialist dispatches.")
+  local text = Report.format_status({
+    {
+      id = "bg-2", background = true, started_at = 100,
+      targets = {
+        { specialist = "r1", kind = "review", status = "running" },
+        { specialist = "t1", kind = "task", status = "stopping" },
+      },
+    },
+    {
+      id = "d-1", background = false, started_at = 90,
+      targets = { { specialist = "r0", kind = "review", status = "running" } },
+    },
+  }, 150)
+  lu.assertStrContains(text, "Running specialist dispatches: 2")
+  lu.assertStrContains(text, "bg-2 (background, 50s): r1(review) running, t1(task) stopping")
+  lu.assertStrContains(text, "d-1 (60s): r0(review) running")
+end
+
+function TestReport:test_format_action_result_counts_delivered_and_refused()
+  local text = Report.format_action_result("message", {
+    { dispatch = "bg-1", specialist = "r1", kind = "review", ok = true, detail = "queued" },
+    { dispatch = "bg-1", specialist = "r2", kind = "review", ok = false,
+      detail = "no live session (not started yet, or already finished)" },
+  })
+  lu.assertStrContains(text, "Message result: 1 delivered, 1 not delivered")
+  lu.assertStrContains(text, "bg-1 r1(review): queued")
+  lu.assertStrContains(text, "bg-1 r2(review): refused (no live session")
+  -- empty match set stays a single informative line
+  text = Report.format_action_result("stop", {})
+  lu.assertStrContains(text, "Stop result: 0 delivered, 0 not delivered")
+  lu.assertStrContains(text, "no matched specialist sessions")
+end
+
 return TestReport

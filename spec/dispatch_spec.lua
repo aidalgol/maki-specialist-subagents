@@ -434,4 +434,153 @@ function TestDispatch:test_reviews_lookup_reports_all_specialists_per_path()
   lu.assertStrContains(text, "0 of 1 file(s) have ledger coverage")
 end
 
+-- ---------------------------------------------------------------------------
+-- Background dispatch validation + running-dispatch registry
+-- (plan: refined-casual-grouse)
+-- ---------------------------------------------------------------------------
+
+function TestDispatch:test_background_error_rules()
+  local main = { name = "main", chain = {} }
+  local nested = { name = "impl", chain = { { name = "a", kind = "task" } } }
+  -- allowed shape
+  lu.assertEquals(Dispatch.background_error(main, true, false), nil)
+  -- kill switch
+  lu.assertStrContains(Dispatch.background_error(main, false, false), "allow_background = false")
+  -- nested delegates stay synchronous (user decision, delegated-reach pricing)
+  lu.assertStrContains(Dispatch.background_error(nested, true, false), "main-only")
+  -- headless: no task UI to wake/notify
+  lu.assertStrContains(Dispatch.background_error(main, true, true), "task UI")
+  lu.assertStrContains(Dispatch.background_error(main, true, true), "synchronously")
+end
+
+function TestDispatch:test_action_error_rules()
+  local main = { name = "main", chain = {} }
+  local nested = { name = "impl", chain = { { name = "a", kind = "task" } } }
+  lu.assertEquals(Dispatch.action_error({ action = "status" }, main), nil)
+  lu.assertEquals(Dispatch.action_error({ action = "status" }, nested), nil,
+    "status is a read-only query, allowed from any invoker")
+  lu.assertEquals(Dispatch.action_error({ action = "message", text = "hi" }, main), nil)
+  lu.assertEquals(Dispatch.action_error({ action = "stop" }, main), nil)
+  lu.assertStrContains(Dispatch.action_error({ action = "message", text = "hi" }, nested), "main-only")
+  lu.assertStrContains(Dispatch.action_error({ action = "stop" }, nested), "main-only")
+  lu.assertStrContains(Dispatch.action_error({ action = "message" }, main), "needs text")
+  lu.assertStrContains(Dispatch.action_error({ action = "message", text = "" }, main), "needs text")
+  lu.assertStrContains(Dispatch.action_error({ action = "pause" }, main), "status")
+  lu.assertStrContains(Dispatch.action_error({ action = "stop", dispatch = 7 }, main), "dispatch id")
+  -- action must not be combined with dispatching fields
+  lu.assertStrContains(Dispatch.action_error({ action = "status", specialist = "r", brief = "b" }, main),
+    "remove specialist")
+  lu.assertStrContains(Dispatch.action_error({ action = "status", background = true }, main),
+    "remove background")
+  lu.assertStrContains(Dispatch.action_error({ action = "status", targets = {} }, main), "remove targets")
+end
+
+function TestDispatch:test_running_registry_lifecycle()
+  local State = Dispatch._state
+  local entry = Dispatch.running_register("bg-77", "sess-A", true, {
+    { specialist = "r1", kind = "review" },
+    { specialist = "t1", kind = "task" },
+  })
+  lu.assertEquals(entry.seq, 77)
+  lu.assertEquals(entry.background, true)
+  lu.assertEquals(#entry.targets, 2)
+  lu.assertEquals(entry.targets[1].status, "running")
+  lu.assertEquals(State.running["bg-77"], entry)
+
+  -- attach a live session, then mark terminal: the session is detached and
+  -- the entry survives while the sibling target is still running
+  Dispatch.running_attach("bg-77", 1, { fake = "sess" })
+  lu.assertEquals(entry.targets[1].sess.fake, "sess")
+  Dispatch.running_mark("bg-77", 1, "done")
+  lu.assertEquals(entry.targets[1].status, "done")
+  lu.assertEquals(entry.targets[1].sess, nil, "terminal target detaches its session")
+  lu.assertEquals(State.running["bg-77"], entry, "entry survives while a target is running")
+  -- marking a finished target again is idempotent
+  Dispatch.running_mark("bg-77", 1, "done")
+  lu.assertEquals(State.running["bg-77"], entry)
+  Dispatch.running_mark("bg-77", 2, "cancelled")
+  lu.assertEquals(State.running["bg-77"], nil, "entry dropped when every target is done")
+
+  -- matching: by parent session, filtered and oldest-first; or by id
+  Dispatch.running_register("bg-80", "sess-B", true, { { specialist = "x", kind = "review" } })
+  Dispatch.running_register("d-79", "sess-A", false, { { specialist = "y", kind = "task" } })
+  Dispatch.running_register("bg-81", "sess-A", true, { { specialist = "z", kind = "review" } })
+  local ids = {}
+  for _, e in ipairs(Dispatch.match_dispatches("sess-A")) do
+    ids[#ids + 1] = e.id
+  end
+  lu.assertEquals(ids, { "d-79", "bg-81" }, "own dispatches, oldest first, not other sessions'")
+  ids = {}
+  for _, e in ipairs(Dispatch.match_dispatches("sess-B")) do
+    ids[#ids + 1] = e.id
+  end
+  lu.assertEquals(ids, { "bg-80" })
+  lu.assertEquals(#Dispatch.match_dispatches("sess-A", "bg-80"), 0,
+    "an explicit id from another session is not matched")
+  lu.assertEquals(Dispatch.match_dispatches("sess-A", "bg-81")[1].id, "bg-81")
+  lu.assertEquals(#Dispatch.match_dispatches("sess-A", "bg-999"), 0)
+  Dispatch.running_pop("bg-80")
+  Dispatch.running_pop("d-79")
+  Dispatch.running_pop("bg-81")
+  lu.assertEquals(#Dispatch.match_dispatches("sess-A"), 0)
+end
+
+function TestDispatch:test_validate_background_target_refusals()
+  local Registry = require("specialist_subagents.registry")
+  local saved_get = Registry.get
+  local specs = {
+    r = { name = "r", type = "review" },
+    impl = { name = "impl", type = "implementation" },
+  }
+  Registry.get = function(_, name) return specs[name] end
+  local ok1, err = pcall(function()
+    local main = { name = "main", chain = {} }
+    -- unknown specialist
+    local e = Dispatch.validate_background_target("/tmp/x",
+      { specialist = "nobody", brief = "b", claims = {}, scope = { files = {} } }, main, { used = 0 })
+    lu.assertStrContains(e, "unknown specialist")
+    -- cycle refusal surfaces synchronously
+    e = Dispatch.validate_background_target("/tmp/x",
+      { specialist = "r", brief = "b", claims = {}, scope = { files = {} } },
+      { name = "r", chain = {} }, { used = 0 })
+    lu.assertStrContains(e, "cycle")
+    -- budget exhaustion via the throwaway counter
+    local Config = require("specialist_subagents.config")
+    local saved_budget = Config.per_turn_budget
+    Config.per_turn_budget = 1
+    e = Dispatch.validate_background_target("/tmp/x",
+      { specialist = "r", brief = "b", claims = {}, scope = { files = {} } }, main, { used = 1 })
+    Config.per_turn_budget = saved_budget
+    lu.assertStrContains(e, "budget exhausted")
+    -- clean target passes
+    e = Dispatch.validate_background_target("/tmp/x",
+      { specialist = "r", brief = "b", kind = "review", claims = {}, scope = { files = {} } },
+      main, { used = 0 })
+    lu.assertEquals(e, nil)
+    -- strict_claims conflict surfaces synchronously (task dispatch, strict on)
+    local saved_strict = Config.strict_claims
+    Config.strict_claims = true
+    Dispatch._state.claims[1] = { claims = { "src/**" }, owner = "sibling" }
+    e = Dispatch.validate_background_target("/tmp/x",
+      { specialist = "impl", brief = "b", kind = "task", claims = { "src/**" }, scope = { files = {} } },
+      main, { used = 0 })
+    Config.strict_claims = saved_strict
+    Dispatch._state.claims[1] = nil
+    lu.assertStrContains(e, "strict_claims")
+  end)
+  Registry.get = saved_get
+  lu.assertTrue(ok1, "validate_background_target runs: " .. tostring(err))
+end
+
+-- normalize_input must keep accepting dispatch inputs that also carry
+-- background/action-style keys (they are handled by handle(), not targets).
+function TestDispatch:test_normalize_input_ignores_background_and_action_keys()
+  local targets, err = Dispatch.normalize_input({
+    specialist = "r", brief = "b", background = true,
+  })
+  lu.assertEquals(err, nil)
+  lu.assertEquals(#targets, 1)
+  lu.assertEquals(targets[1].background, nil, "background is not a per-target field")
+end
+
 return TestDispatch

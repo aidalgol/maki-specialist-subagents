@@ -36,6 +36,8 @@ local State = {
   claims = {},     -- active task claims: { claims = {...}, owner = "..." }
   active = 0,      -- concurrent specialist sessions
   finished = {},   -- join key -> { result, at } for waiter handoff
+  running = {},    -- dispatch id -> in-flight dispatch (see running_register)
+  seq = 0,         -- dispatch id counter (sync d-<n>, background bg-<n>)
 }
 
 local MAX_FINISHED = 50
@@ -53,6 +55,18 @@ end
 
 local function warn_log(msg)
   pcall(function() maki.log.warn("specialist-subagents: " .. msg) end)
+end
+
+-- The parent chat session id, for the running-dispatch registry and the
+-- background completion notify. Nil when the host does not expose one
+-- (headless runs): background then refuses earlier, and action matching
+-- falls back to an explicit `dispatch` id.
+local function session_id_of(ctx)
+  if type(ctx) ~= "table" and type(ctx) ~= "userdata" then
+    return nil
+  end
+  local ok, sid = pcall(function() return ctx:session_id() end)
+  return ok and type(sid) == "string" and sid or nil
 end
 
 -- ---------------------------------------------------------------------------
@@ -129,6 +143,185 @@ function M.normalize_input(input)
     return nil, err
   end
   return { t }, nil
+end
+
+-- Validate a `background = true` request. Pure: `headless` (no task UI to
+-- wake or notify, e.g. under `maki -p`) is computed by the caller. Returns
+-- the rejection reason, or nil when background is allowed.
+function M.background_error(invoker, allow_background, headless)
+  if allow_background == false then
+    return "background dispatches are disabled (allow_background = false)"
+  end
+  if invoker.name ~= "main" then
+    return "background dispatches are main-only: a nested delegate's tool call "
+      .. "must stay synchronous so its result reaches the specialist's own report"
+  end
+  if headless then
+    return "background dispatches need the task UI (none here, e.g. under `maki -p`): "
+      .. "there is no session to wake with the results. Dispatch synchronously."
+  end
+  return nil
+end
+
+-- Validate an `action` request. Pure. `status` is a read-only query and is
+-- allowed from any invoker; `message`/`stop` act on live sessions and are
+-- main-only, like task delegation.
+function M.action_error(input, invoker)
+  local action = type(input) == "table" and input.action or nil
+  if action ~= "status" and action ~= "message" and action ~= "stop" then
+    return "action must be \"status\", \"message\", or \"stop\""
+  end
+  if action ~= "status" and invoker.name ~= "main" then
+    return "action = \"" .. action .. "\" is main-only"
+  end
+  if action == "message" and (type(input.text) ~= "string" or input.text == "") then
+    return "action = \"message\" needs text"
+  end
+  for _, field in ipairs({ "specialist", "brief", "targets", "background" }) do
+    if input[field] ~= nil then
+      return "action = \"" .. action .. "\" does not dispatch: remove " .. field
+        .. " (or drop action to dispatch)"
+    end
+  end
+  if input.dispatch ~= nil and type(input.dispatch) ~= "string" then
+    return "dispatch must be a dispatch id string"
+  end
+  return nil
+end
+
+-- Synchronous pre-validation for one background target: the refusals that
+-- must come back as immediate tool errors, not in a later message. Pure
+-- enough for unit tests given a cwd. `peek` is a throwaway budget counter
+-- ({ used = n }); the real per-call budget is counted again inside the
+-- spawned run, starting from the number of targets this pass refused, so a
+-- target is never counted twice.
+function M.validate_background_target(cwd, target, invoker, peek)
+  local spec = Registry.get(cwd, target.specialist)
+  if not spec then
+    return "unknown specialist: " .. target.specialist
+  end
+  local _, perr = M.check_policy(target, spec, invoker)
+  if perr then
+    return perr
+  end
+  peek.used = peek.used + 1
+  if peek.used > Config.per_turn_budget then
+    return string.format("per-turn delegation budget exhausted (%d)", Config.per_turn_budget)
+  end
+  local kind = target.kind or (spec.type == "review" and "review" or "task")
+  if kind == "task" and #target.claims > 0 and Config.strict_claims then
+    local conflicts = Ledger.find_claim_conflicts(State.claims, target.claims)
+    if #conflicts > 0 then
+      return "strict_claims: " .. conflicts[1]
+    end
+  end
+  return nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Running-dispatch registry (action = status / message / stop)
+-- ---------------------------------------------------------------------------
+
+-- One in-flight dispatch: id "d-<n>" (synchronous) or "bg-<n>" (background).
+-- Each target row carries the live session while its `sess:prompt` runs, so
+-- `action = "message"` / `"stop"` can reach it; the row is detached the
+-- moment the target reaches a terminal status. The whole entry is removed
+-- when every target is done (or the dispatch is cancelled).
+function M.running_register(id, parent_session, background, targets)
+  -- Bound leaked entries: a dispatch cancelled without its on_cancel hook
+  -- firing (the hook is pcall'd, the API may be absent) ages out after an
+  -- hour instead of showing in `action = "status"` forever.
+  local stale_before = now() - 3600
+  for stale_id, e in pairs(State.running) do
+    if (e.started_at or 0) < stale_before then
+      State.running[stale_id] = nil
+    end
+  end
+  local entry = {
+    id = id,
+    seq = tonumber(tostring(id):match("%d+$")) or 0,
+    parent_session = parent_session,
+    background = background == true,
+    started_at = now(),
+    targets = {},
+  }
+  for _, t in ipairs(targets or {}) do
+    entry.targets[#entry.targets + 1] = {
+      specialist = t.specialist,
+      kind = t.kind,
+      status = "running",
+    }
+  end
+  State.running[id] = entry
+  return entry
+end
+
+local function running_row(id, idx)
+  local entry = State.running[id]
+  return entry and entry.targets[idx] or nil
+end
+
+function M.running_attach(id, idx, sess)
+  local row = running_row(id, idx)
+  if row then
+    row.sess = sess
+  end
+end
+
+-- Terminal status for one target; detaches its session (a closed session
+-- must not be messaged or stopped) and drops the entry once every target is
+-- done. Idempotent.
+function M.running_mark(id, idx, status)
+  local entry = State.running[id]
+  local row = running_row(id, idx)
+  if not row then
+    return
+  end
+  row.status = status
+  row.sess = nil
+  if entry then
+    for _, t in ipairs(entry.targets) do
+      if t.status == "running" then
+        return
+      end
+    end
+    State.running[id] = nil
+  end
+end
+
+function M.running_pop(id)
+  State.running[id] = nil
+end
+
+-- Dispatches visible to one action call: the named dispatch when given,
+-- else every running dispatch opened from `parent_session`. Sorted oldest
+-- first (by numeric sequence).
+function M.match_dispatches(parent_session, dispatch_id)
+  local out = {}
+  if type(dispatch_id) == "string" then
+    -- An explicit id still has to belong to the caller's session: one
+    -- maki instance can run several chats, and message/stop must not
+    -- reach another chat's specialists.
+    local e = State.running[dispatch_id]
+    if e and e.parent_session == parent_session then
+      out[#out + 1] = e
+    end
+    return out
+  end
+  for _, e in pairs(State.running) do
+    if e.parent_session == parent_session then
+      out[#out + 1] = e
+    end
+  end
+  table.sort(out, function(a, b)
+    return (a.seq or 0) < (b.seq or 0)
+  end)
+  return out
+end
+
+local function next_dispatch_id(background)
+  State.seq = State.seq + 1
+  return (background and "bg-" or "d-") .. State.seq
 end
 
 -- ---------------------------------------------------------------------------
@@ -792,6 +985,14 @@ local function run_target(ctx, target, invoker, call)
   -- the user; untracked on every close path below.
   local session_key = Permissions.track_new(ctx, listed_before, spec.name, kind)
 
+  -- Publish the live session on the dispatch's registry row so a
+  -- `delegate { action = "message" | "stop" }` call can reach it while
+  -- `sess:prompt` below is blocked on it. Detached by running_mark on every
+  -- terminal status.
+  if target._dispatch then
+    M.running_attach(target._dispatch.id, target._dispatch.idx, sess)
+  end
+
   -- brief: self-contained task + identity + (reviews) changed files + diff
   local brief = table.concat({
     string.format("Task from %s (%s dispatch):", invoker.name, kind),
@@ -929,59 +1130,11 @@ end
 -- Entry point
 -- ---------------------------------------------------------------------------
 
--- Shared pipeline for the registered tool and nested local tools.
--- Returns (llm_output_string, is_error).
-function M.handle(ctx, input, invoker)
-  invoker = invoker or { name = "main", chain = {} }
-  local targets, err = M.normalize_input(input)
-  if not targets then
-    return "error: " .. err, true
-  end
-
-  local cwd = maki.uv.cwd()
-  -- Unreachable while the load-time check runs first; defense in depth
-  -- against any future rescan path.
-  local _, _, discovery_errors = Registry.catalog(cwd)
-  if #discovery_errors > 0 then
-    maki.log.error("specialist-subagents: broken specialist definitions:\n  - "
-      .. table.concat(discovery_errors, "\n  - "))
-    return "error: broken specialist definitions:\n  - "
-      .. table.concat(discovery_errors, "\n  - "), true
-  end
-  local call = { cwd = cwd, used = 0 }
-  local results = {}
-
-  -- fan-out across targets, bounded by max_active.
-  --
-  -- NOT maki.async.join: join runs every worker through maki.async.run,
-  -- whose tasks are stopped after 60 seconds. Each specialist killed there
-  -- never fires join's completion callback, so the dispatch hangs forever —
-  -- every review longer than a minute died mid-stream and wedged the tool
-  -- call (observed live: async.run: task failed x3 at +59.9s). gather runs
-  -- the fns as children of this call (cancelled with it, no time cap); the
-  -- semaphore keeps the concurrency bound.
-  local sem = maki.async.semaphore(Config.max_active)
-  local fns = {}
-  for i, target in ipairs(targets) do
-    fns[#fns + 1] = function()
-      local permit = sem:acquire()
-      local ok, res = pcall(run_target, ctx, target, invoker, call)
-      permit:release()
-      if not ok then
-        res = {
-          specialist = tostring(target.specialist),
-          kind = target.kind,
-          status = "failed",
-          error = "pipeline error: " .. tostring(res),
-          warnings = {},
-        }
-        warn_log("pipeline error for " .. tostring(target.specialist) .. ": " .. tostring(res.error))
-      end
-      results[i] = res
-    end
-  end
-  maki.async.gather(fns)
-
+-- Shared post-gather tail: compact per-target results into input order,
+-- format the aggregate, and run the review coverage audit. The synchronous
+-- and background completion paths both call this so they cannot drift.
+-- Returns (text, ordered).
+local function aggregate_text(cwd, targets, results)
   -- compact results into input order
   local ordered = {}
   for i in ipairs(targets) do
@@ -1026,13 +1179,276 @@ function M.handle(ctx, input, invoker)
     end
   end
 
+  return text, ordered
+end
+
+-- `action = "status" | "message" | "stop"`: query or reach the specialists
+-- of in-flight dispatches. Main-only for message/stop (action_error).
+function M.handle_action(ctx, input, invoker)
+  local aerr = M.action_error(input, invoker)
+  if aerr then
+    return "error: " .. aerr, true
+  end
+  local parent_session = session_id_of(ctx)
+  local entries = M.match_dispatches(parent_session, input.dispatch)
+  if #entries == 0 then
+    local which = type(input.dispatch) == "string" and input.dispatch or "from this session"
+    return "No running specialist dispatches " .. which .. ".", false
+  end
+  local action = input.action
+  if action == "status" then
+    return Report.format_status(entries, now()), false
+  end
+
+  local rows = {}
+  for _, e in ipairs(entries) do
+    for idx, tgt in ipairs(e.targets) do
+      local row = { dispatch = e.id, specialist = tgt.specialist, kind = tgt.kind }
+      if not tgt.sess then
+        row.ok = false
+        row.detail = "no live session (not started yet, or already finished)"
+      elseif action == "message" then
+        local ok_call, sent, serr = pcall(tgt.sess.send, tgt.sess, input.text)
+        row.ok = ok_call and sent == true
+        row.detail = row.ok and "queued" or tostring(serr or "send failed")
+      else -- stop
+        local ok_call = pcall(tgt.sess.close, tgt.sess)
+        row.ok = ok_call
+        row.detail = ok_call and "closing (its prompt returns as cancelled)" or "close failed"
+        if ok_call then
+          tgt.status = "stopping"
+        end
+      end
+      rows[#rows + 1] = row
+    end
+  end
+  return Report.format_action_result(action, rows), false
+end
+
+-- `background = true`: validate synchronously (violations come back as
+-- immediate tool errors), then move the fan-out plus the aggregation into a
+-- single maki.async.spawn and return a receipt. The spawned task delivers
+-- the aggregate report via maki.session.notify (wake = true).
+function M.handle_background(ctx, targets, invoker, cwd)
+  local parent_session = session_id_of(ctx)
+  -- Headless: no session id to wake with the results (e.g. under `maki -p`),
+  -- or no task UI at all. Checked here, not just via maki.task.list, so an
+  -- empty task list can never route results into a notify that cannot land.
+  local headless = parent_session == nil
+  if not headless and type(maki) == "table" and type(maki.task) == "table" then
+    local ok, tasks = pcall(function() return maki.task.list() end)
+    headless = not (ok and type(tasks) == "table")
+  end
+  local berr = M.background_error(invoker, Config.allow_background, headless)
+  if berr then
+    return "error: " .. berr, true
+  end
+
+  -- synchronous validation pass; refusals never reach the spawned run
+  local peek = { used = 0 }
+  local pending = {}
+  local refused = {}
+  for _, target in ipairs(targets) do
+    local verr = M.validate_background_target(cwd, target, invoker, peek)
+    if verr then
+      refused[#refused + 1] = {
+        specialist = target.specialist, kind = target.kind,
+        status = "refused", error = verr, warnings = {},
+      }
+    else
+      pending[#pending + 1] = target
+    end
+  end
+  if #pending == 0 then
+    local text = Report.format_aggregate(refused)
+    return "error: no dispatchable targets in the background request\n" .. text, true
+  end
+
+  local disp_id = next_dispatch_id(true)
+  -- Only dispatchable targets get registry rows: a validation-refused
+  -- target never opens a session, and a stuck "running" row would misstate
+  -- both `action = "status"` and the completion count.
+  M.running_register(disp_id, parent_session, true, pending)
+  for idx, target in ipairs(pending) do
+    target._dispatch = { id = disp_id, idx = idx }
+  end
+
+  -- The spawned run starts its real budget count from the number of targets
+  -- the validation pass refused, so every target counts exactly once across
+  -- both passes (validate_background_target documents the deal).
+  local run_call = { cwd = cwd, used = #refused }
+  local spawned_ok = pcall(function()
+    maki.async.spawn(function()
+      -- Cancellation (plugin unload, stopped task) must not leave the
+      -- registry entry behind: the aggregate would never be delivered, and
+      -- `action = "status"` would list this dispatch forever.
+      pcall(function()
+        maki.async.on_cancel(function()
+          M.running_pop(disp_id)
+          warn_log("background dispatch " .. disp_id .. " cancelled; its results were lost")
+        end)
+      end)
+      local ok, task_err = pcall(function()
+        local sem = maki.async.semaphore(Config.max_active)
+        local results = {}
+        local fns = {}
+        for idx, target in ipairs(pending) do
+          fns[#fns + 1] = function()
+            local permit = sem:acquire()
+            local ok_t, res = pcall(run_target, ctx, target, invoker, run_call)
+            permit:release()
+            if not ok_t then
+              res = {
+                specialist = tostring(target.specialist),
+                kind = target.kind,
+                status = "failed",
+                error = "pipeline error: " .. tostring(res),
+                warnings = {},
+              }
+              warn_log("pipeline error for " .. tostring(target.specialist) .. ": " .. tostring(res.error))
+            end
+            M.running_mark(disp_id, idx, res and res.status or "failed")
+            results[idx] = res
+          end
+        end
+        maki.async.gather(fns)
+
+        -- Aggregate over the dispatchable targets only; synchronous
+        -- refusals are appended below, they never ran a session.
+        local text = aggregate_text(cwd, pending, results)
+        if #refused > 0 then
+          local ref = Report.format_aggregate(refused)
+          text = text .. "\n\nRefused at validation (no session opened):\n" .. ref
+        end
+
+        local done = 0
+        for _, r in ipairs(results) do
+          if r and r.status == "done" then
+            done = done + 1
+          end
+        end
+        local _, nerr = maki.session.notify(text, {
+          session = parent_session,
+          wake = true,
+          display = "specialist-subagents: " .. disp_id .. " finished ("
+            .. done .. "/" .. #pending .. " completed)",
+        })
+        if nerr then
+          -- the session may have closed mid-run: one retry, then the report
+          -- is lost (warn at error level so it is findable in the log)
+          maki.async.sleep(1000)
+          local _, nerr2 = maki.session.notify(text, {
+            session = parent_session,
+            wake = true,
+            display = "specialist-subagents: " .. disp_id .. " finished",
+          })
+          if nerr2 then
+            pcall(function()
+              maki.log.error("specialist-subagents: background dispatch " .. disp_id
+                .. " completed but its aggregate report could not be delivered ("
+                .. tostring(nerr2) .. "); verdicts are in the review ledger")
+            end)
+          end
+        end
+      end)
+      M.running_pop(disp_id)
+      if not ok then
+        warn_log("background dispatch " .. disp_id .. " failed: " .. tostring(task_err))
+      end
+    end)
+  end)
+  if not spawned_ok then
+    M.running_pop(disp_id)
+    return "error: could not start the background dispatch task; dispatch synchronously", true
+  end
+
+  return Report.format_receipt(disp_id, targets, refused), false
+end
+
+-- Shared pipeline for the registered tool and nested local tools.
+-- Returns (llm_output_string, is_error).
+function M.handle(ctx, input, invoker)
+  invoker = invoker or { name = "main", chain = {} }
+  if type(input) == "table" and input.action ~= nil then
+    return M.handle_action(ctx, input, invoker)
+  end
+
+  local targets, err = M.normalize_input(input)
+  if not targets then
+    return "error: " .. err, true
+  end
+
+  local cwd = maki.uv.cwd()
+  -- Unreachable while the load-time check runs first; defense in depth
+  -- against any future rescan path.
+  local _, _, discovery_errors = Registry.catalog(cwd)
+  if #discovery_errors > 0 then
+    maki.log.error("specialist-subagents: broken specialist definitions:\n  - "
+      .. table.concat(discovery_errors, "\n  - "))
+    return "error: broken specialist definitions:\n  - "
+      .. table.concat(discovery_errors, "\n  - "), true
+  end
+
+  if input.background == true then
+    return M.handle_background(ctx, targets, invoker, cwd)
+  end
+
+  local call = { cwd = cwd, used = 0 }
+  local results = {}
+
+  -- the dispatch is addressable by `action` calls while it runs
+  local disp_id = next_dispatch_id(false)
+  M.running_register(disp_id, session_id_of(ctx), false, targets)
+  for i, target in ipairs(targets) do
+    target._dispatch = { id = disp_id, idx = i }
+  end
+  pcall(function()
+    maki.async.on_cancel(function() M.running_pop(disp_id) end)
+  end)
+
+  -- fan-out across targets, bounded by max_active.
+  --
+  -- NOT maki.async.join: join runs every worker through maki.async.run,
+  -- whose tasks are stopped after 60 seconds. Each specialist killed there
+  -- never fires join's completion callback, so the dispatch hangs forever —
+  -- every review longer than a minute died mid-stream and wedged the tool
+  -- call (observed live: async.run: task failed x3 at +59.9s). gather runs
+  -- the fns as children of this call (cancelled with it, no time cap); the
+  -- semaphore keeps the concurrency bound.
+  local sem = maki.async.semaphore(Config.max_active)
+  local fns = {}
+  for i, target in ipairs(targets) do
+    fns[#fns + 1] = function()
+      local permit = sem:acquire()
+      local ok, res = pcall(run_target, ctx, target, invoker, call)
+      permit:release()
+      if not ok then
+        res = {
+          specialist = tostring(target.specialist),
+          kind = target.kind,
+          status = "failed",
+          error = "pipeline error: " .. tostring(res),
+          warnings = {},
+        }
+        warn_log("pipeline error for " .. tostring(target.specialist) .. ": " .. tostring(res.error))
+      end
+      M.running_mark(disp_id, i, res and res.status or "failed")
+      results[i] = res
+    end
+  end
+  maki.async.gather(fns)
+
+  local text = aggregate_text(cwd, targets, results)
+  M.running_pop(disp_id)
+
   local any_done = false
-  for _, r in ipairs(ordered) do
-    if r.status == "done" then
+  for i in ipairs(targets) do
+    local r = results[i]
+    if r and r.status == "done" then
       any_done = true
     end
   end
-  return text, not any_done and #ordered > 0 and true or false
+  return text, not any_done and #targets > 0 and true or false
 end
 
 -- ---------------------------------------------------------------------------
