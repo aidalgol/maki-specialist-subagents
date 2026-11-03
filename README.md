@@ -168,7 +168,8 @@ Global config:
 maki.pack.add({
   {
     src = "https://github.com/aidalgol/maki-specialist-subagents",
-    version = "v0.1.0",
+    -- Optionally specify a release.
+    -- version = "v0.1.0",
   },
 })
 ```
