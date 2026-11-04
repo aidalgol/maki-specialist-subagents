@@ -179,6 +179,7 @@ function M.preamble(spec, kind, invocation)
       "VERDICT: approve",
       "",
       "The tail is parsed by a machine, not read as prose. Write the verdict as the bare token on its own last line: `VERDICT: approve` or `VERDICT: request-changes` -- no other words, punctuation, or markdown on that line. A report whose tail does not parse is recorded as unparsable and satisfies no review gate, so the work gets re-reviewed.",
+      "Keep the tail plain lines only: no markdown headings, no bold, and number every finding line.",
       "Use VERDICT: approve when nothing needs changing, VERDICT: request-changes otherwise. Every finding gets a numbered line under FINDINGS: (write `FINDINGS:` with no items when there are none).",
     }, "\n")
   else

@@ -69,6 +69,40 @@ function TestReport:test_findings_none()
   lu.assertEquals(#Report.parse_findings("no findings here"), 0)
 end
 
+-- A finding that quotes a section word mid-text must not close the block:
+-- the item shape wins over the marker match, so neither that finding nor
+-- the ones after it are dropped.
+function TestReport:test_findings_quoting_marker_words_do_not_close_block()
+  local text = table.concat({
+    "FINDINGS:",
+    "1. The tail must end with VERDICT: approve",
+    "2. second issue",
+    "VERDICT: request-changes",
+  }, "\n")
+  local f = Report.parse_findings(text)
+  lu.assertEquals(#f, 2)
+  -- strip_markdown drops the markdown characters but keeps the colon
+  lu.assertEquals(f[1], { n = 1, text = "The tail must end with VERDICT: approve" })
+  lu.assertEquals(f[2], { n = 2, text = "second issue" })
+  -- the last line is the real marker, so the verdict survives intact
+  lu.assertEquals(Report.parse_review(text).verdict, "request-changes")
+end
+
+-- A bold-anchored finding quoting "FINDINGS:" mid-text is stored, not
+-- mistaken for the block opener or a terminator.
+function TestReport:test_findings_bold_anchor_quoting_marker_word_is_stored()
+  local f = Report.parse_findings(table.concat({
+    "### Findings",
+    "**a:9** — must emit FINDINGS: before VERDICT:",
+    "",
+    "### Verdict",
+    "VERDICT: approve",
+  }, "\n"))
+  lu.assertEquals(#f, 1)
+  lu.assertStrContains(f[1].text, "a:9 — ")
+  lu.assertStrContains(f[1].text, "must emit FINDINGS: before")
+end
+
 function TestReport:test_summary_inline()
   lu.assertEquals(Report.parse_summary("SUMMARY: all good\nVERDICT: approve"), "all good")
 end
@@ -258,6 +292,163 @@ function TestReport:test_format_action_result_counts_delivered_and_refused()
   text = Report.format_action_result("stop", {})
   lu.assertStrContains(text, "Stop result: 0 delivered, 0 not delivered")
   lu.assertStrContains(text, "no matched specialist sessions")
+end
+
+-- ---------------------------------------------------------------------------
+-- Widened parsers: heading-form summaries, bullet and bold-anchored findings,
+-- and the raw-dump / coverage wording that came with them.
+-- ---------------------------------------------------------------------------
+
+-- A verbatim tail of a live drift incident: a heading-shaped findings block,
+-- bold-anchored findings separated by blank lines, and a heading-form verdict.
+-- None of this parsed before the widening.
+function TestReport:test_parse_review_bold_anchored_findings_fixture()
+  local p = Report.parse_review(table.concat({
+    "### Findings",
+    "",
+    [[**AGENTS.md:55-60** — The bullet point contains two separate ideas in a single sentence, violating the style guide's "one idea per sentence" rule. The clause "Cover it in `spec/*_spec.lua`" should be a separate sentence. The instruction for placing logic ends with a period after the parenthetical list.]],
+    "",
+    [[**AGENTS.md:73** — The path string `.maki/specialists/*.md` is missing inline code formatting. The surrounding code uses backticks for paths (e.g., `lua/specialist_subagents.lua` on line 42), but this path lacks the markdown code span markers around it.]],
+    "",
+    "### Verdict",
+    "",
+    "VERDICT: request-changes",
+  }, "\n"))
+  lu.assertEquals(p.known, true)
+  lu.assertEquals(p.verdict, "request-changes")
+  lu.assertEquals(p.summary, nil)
+  lu.assertEquals(#p.findings, 2)
+  -- unnumbered items get sequential numbers from an internal counter
+  lu.assertEquals(p.findings[1].n, 1)
+  lu.assertEquals(p.findings[2].n, 2)
+  -- the bold anchor is kept in the stored text (whole line, stripped)
+  local prefix1 = "AGENTS.md:55-60 — "
+  lu.assertEquals(p.findings[1].text:sub(1, #prefix1), prefix1)
+  lu.assertStrContains(p.findings[1].text, "one idea per sentence")
+  -- strip_markdown mangles inline code slightly (`spec/*_spec.lua` ->
+  -- `spec/spec.lua`), so assert against the stripped form
+  lu.assertStrContains(p.findings[1].text,
+    [[The clause "Cover it in spec/spec.lua" should be a separate sentence]])
+  local prefix2 = "AGENTS.md:73 — "
+  lu.assertEquals(p.findings[2].text:sub(1, #prefix2), prefix2)
+  lu.assertStrContains(p.findings[2].text, "is missing inline code formatting")
+  -- the "### Verdict" heading closed the block; it must not be a finding
+  for _, f in ipairs(p.findings) do
+    lu.assertEquals(f.text:find("Verdict", 1, true), nil)
+  end
+end
+
+-- A "### Summary" heading collects the prose below it until a blank line or
+-- any section marker; it never swallows the findings opener.
+function TestReport:test_summary_heading_form_stops_before_findings_opener()
+  lu.assertEquals(Report.parse_summary(table.concat({
+    "### Summary",
+    "One issue found.",
+    "",
+    "### Findings",
+    "1. whatever",
+  }, "\n")), "One issue found.")
+  -- no blank line before the findings opener: it still terminates
+  lu.assertEquals(Report.parse_summary(table.concat({
+    "### Summary",
+    "Two lines",
+    "of summary text.",
+    "### Findings",
+    "1. x",
+  }, "\n")), "Two lines of summary text.")
+end
+
+-- "**FINDINGS:**" opens the block too; bullet items carry no explicit number,
+-- so the internal counter numbers them sequentially.
+function TestReport:test_findings_bold_opener_with_bullets_numbers_sequentially()
+  local f = Report.parse_findings(table.concat({
+    "**FINDINGS:**",
+    "",
+    "- one issue",
+    "",
+    "- two issue",
+  }, "\n"))
+  lu.assertEquals(f, { { n = 1, text = "one issue" }, { n = 2, text = "two issue" } })
+end
+
+-- A blank line is only a soft separator: unnumbered prose after it is not
+-- finding-shaped, so the block closes and the prose is dropped.
+function TestReport:test_findings_prose_after_blank_is_not_a_finding()
+  local f = Report.parse_findings(table.concat({
+    "FINDINGS:",
+    "1. one",
+    "",
+    "some closing prose",
+  }, "\n"))
+  lu.assertEquals(#f, 1)
+  lu.assertEquals(f[1], { n = 1, text = "one" })
+end
+
+-- A "### Verdict" heading closes the findings block without a preceding
+-- blank line, so the verdict heading is never slurped into a finding.
+function TestReport:test_findings_verdict_heading_closes_without_blank()
+  local f = Report.parse_findings(table.concat({
+    "### Findings",
+    "**a:1** — bad thing",
+    "",
+    "### Verdict",
+    "VERDICT: request-changes",
+  }, "\n"))
+  lu.assertEquals(#f, 1)
+  lu.assertEquals(f[1].n, 1)
+  local prefix = "a:1 — "
+  lu.assertEquals(f[1].text:sub(1, #prefix), prefix)
+end
+
+-- A parsed verdict with neither findings nor summary is only partially
+-- parsed: the note says so and the raw tail follows.
+function TestReport:test_format_target_partially_parsed_review_appends_raw_after_note()
+  local text = Report.format_target({
+    specialist = "r", kind = "review", status = "done",
+    verdict = "request-changes", findings = {}, summary = nil,
+    scope_files = {}, chain = {}, warnings = {}, raw = "some raw tail",
+  })
+  lu.assertStrContains(text,
+    "Note: report tail was unparsable or only partially parsed; raw review text follows.")
+  lu.assertStrContains(text, "some raw tail")
+end
+
+-- A verdict plus at least one finding is a fully parsed review: the raw
+-- review text stays hidden.
+function TestReport:test_format_target_verdict_with_findings_hides_raw()
+  local text = Report.format_target({
+    specialist = "r", kind = "review", status = "done",
+    verdict = "approve", findings = { { n = 1, text = "x" } },
+    summary = nil, scope_files = {}, chain = {}, warnings = {},
+    raw = "SECRET RAW",
+  })
+  lu.assertStrContains(text, " 1. x")
+  lu.assertEquals(text:find("SECRET RAW", 1, true), nil)
+end
+
+-- A verdict plus a summary also counts as parsed: no raw dump either.
+function TestReport:test_format_target_verdict_with_summary_only_hides_raw()
+  local text = Report.format_target({
+    specialist = "r", kind = "review", status = "done",
+    verdict = "approve", findings = {}, summary = "fine overall",
+    scope_files = {}, chain = {}, warnings = {}, raw = "STILL SECRET",
+  })
+  lu.assertStrContains(text, "Summary: fine overall")
+  lu.assertEquals(text:find("STILL SECRET", 1, true), nil)
+end
+
+-- A legacy row (no reviewers list) that never got a review renders
+-- UNREVIEWED, matching reviews_lookup's wording; a reviewers-list entry
+-- without a verdict is still just unparsed.
+function TestReport:test_format_coverage_legacy_row_without_verdict_is_unreviewed()
+  local text = Report.format_coverage({
+    { path = "a.lua", specialist = "r", verdict = nil },
+    { path = "b.lua", reviewers = { { specialist = "s", verdict = nil } } },
+  }, nil)
+  lu.assertStrContains(text, "a.lua")
+  lu.assertStrContains(text, "UNREVIEWED")
+  lu.assertStrContains(text, "b.lua")
+  lu.assertStrContains(text, "unparsed")
 end
 
 return TestReport

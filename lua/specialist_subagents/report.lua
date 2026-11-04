@@ -26,6 +26,65 @@ local function strip_markdown(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+local function is_blank(line)
+  return line:match("^%s*$") ~= nil
+end
+
+-- True when the line opens the next report section and therefore ends the
+-- current one: "VERDICT: ..." / "SUMMARY: ..." / "FINDINGS: ..." (markdown
+-- bold allowed anywhere), the same words as headings where the colon is
+-- optional ("### Verdict"), and any other ATX heading.
+local function section_marker(line)
+  if line:match("^%s*#+") then
+    return true
+  end
+  if line:lower():find("verdict%s*:", 1, false)
+    or line:lower():find("summary%s*:", 1, false)
+    or line:lower():find("findings%s*:", 1, false) then
+    return true
+  end
+  return line:match("^%s*#*%s*%**[Vv][Ee][Rr][Dd][Ii][Cc][Tt]%**%s*:?%s*$") ~= nil
+    or line:match("^%s*#*%s*%**[Ff][Ii][Nn][Dd][Ii][Nn][Gg][Ss]%**%s*:?%s*$") ~= nil
+    or line:match("^%s*#*%s*%**[Ss][Uu][Mm][Mm][Aa][Rr][Yy]%**%s*:?%s*$") ~= nil
+end
+
+-- The findings-block opener. Returns any item text found on the opener line
+-- after the colon (possibly ""), or nil when the line is not an opener.
+local function findings_header(line)
+  return line:match("^%s*%**[Ff][Ii][Nn][Dd][Ii][Nn][Gg][Ss]%**%s*:%s*(.-)%s*$")
+end
+
+-- Heading-shaped opener ("### Findings", "**FINDINGS**"): the colon is
+-- optional when the word is the entire heading.
+local function findings_heading(line)
+  if line:match("^%s*#*%s*%**[Ff][Ii][Nn][Dd][Ii][Nn][Gg][Ss]%**%s*:?%s*$") then
+    return ""
+  end
+  return nil
+end
+
+-- One finding-shaped line: explicitly numbered ("1. x", "1) x", "- 2. x"),
+-- a bullet ("- x", "* x", "+ x"), or bold-anchored ("**file:line** — text").
+-- Returns the recorded number (explicit numbering only, else nil) and the
+-- raw body, or nil, nil when the line is not finding-shaped.
+local function finding_parts(line)
+  local num, body = line:match("^%s*%-?%s*(%d+)[%.%)%s]+%s*(.+)$")
+  if num then
+    return tonumber(num), body
+  end
+  -- bold-anchored: "**file:line** — text" (optionally bullet-marked); the
+  -- anchor stays: like a numbered item, the whole line is the finding, only
+  -- markdown markers are stripped downstream
+  if line:match("^%s*[-*+]?%s*%*%*[^%*]+%*%*%s*%S") then
+    return nil, line
+  end
+  local bullet = line:match("^%s*[-*+]%s+(.-)%s*$")
+  if bullet then
+    return nil, bullet
+  end
+  return nil, nil
+end
+
 function M.parse_verdict(text)
   if type(text) ~= "string" then
     return nil
@@ -69,13 +128,25 @@ function M.parse_summary(text)
       if inline ~= "" then
         return inline
       end
-      -- summary continues on following lines until a blank line or marker
+      -- summary continues on following lines until the next section
       local buf = {}
       for j = i + 1, #lines do
         local nxt = lines[j]
-        if nxt:match("^%s*$")
-          or nxt:lower():find("verdict%s*:", 1, false)
-          or nxt:lower():find("findings%s*:", 1, false) then
+        if is_blank(nxt) or section_marker(nxt) then
+          break
+        end
+        buf[#buf + 1] = strip_markdown(nxt)
+      end
+      if #buf > 0 then
+        return table.concat(buf, " ")
+      end
+    elseif line:match("^%s*#*%s*%**[Ss][Uu][Mm][Mm][Aa][Rr][Yy]%**%s*:?%s*$") then
+      -- heading-form summary ("### Summary"); the text below it runs until
+      -- the next section opener and never swallows it
+      local buf = {}
+      for j = i + 1, #lines do
+        local nxt = lines[j]
+        if is_blank(nxt) or section_marker(nxt) then
           break
         end
         buf[#buf + 1] = strip_markdown(nxt)
@@ -98,29 +169,42 @@ function M.parse_findings(text)
     lines[#lines + 1] = line
   end
   local in_block = false
+  local at_blank = false
   local n = 0
   for _, line in ipairs(lines) do
-    local header = line:match("^%s*%**[Ff][Ii][Nn][Dd][Ii][Nn][Gg][Ss]%**%s*:%s*(.-)%s*$")
-    if header then
+    local rest = findings_header(line) or findings_heading(line)
+    if rest then
       in_block = true
-      -- a finding may share the header line: "FINDINGS: 1. something"
-      local num, body = header:match("^(%d+)[%.%)%s]+%s*(.+)$")
-      if num then
+      at_blank = false
+      -- a finding may share the opener line: "FINDINGS: 1. something"
+      local num, body = finding_parts(strip_markdown(rest))
+      if body then
         n = n + 1
-        findings[#findings + 1] = { n = tonumber(num) or n, text = strip_markdown(body) }
+        findings[#findings + 1] = { n = num or n, text = strip_markdown(body) }
       end
     elseif in_block then
-      if line:match("^%s*$") then
-        in_block = false
+      if is_blank(line) then
+        -- soft separator: the block may resume if the next non-blank line is
+        -- still finding-shaped, otherwise it closes
+        at_blank = true
       else
-        local num, body = line:match("^%s*%-?%s*(%d+)[%.%)%s]+%s*(.+)$")
-        if num then
+        local num, body = finding_parts(line)
+        if body then
+          -- a finding that quotes a section word ("1. must end with
+          -- VERDICT:") matches the item shapes first and must not close the
+          -- block
           n = n + 1
-          findings[#findings + 1] = { n = tonumber(num) or n, text = strip_markdown(body) }
-        elseif line:lower():find("verdict%s*:", 1, false)
-          or line:lower():find("summary%s*:", 1, false) then
+          findings[#findings + 1] = { n = num or n, text = strip_markdown(body) }
+          at_blank = false
+        elseif section_marker(line) then
+          in_block = false
+        elseif at_blank then
+          -- a non-blank line after a blank that is neither finding-shaped
+          -- nor a marker closes the block
           in_block = false
         end
+        -- without a preceding blank the block stays open: a prose line
+        -- directly after a finding does not close it
       end
     end
   end
@@ -228,8 +312,10 @@ function M.format_target(r)
     for _, f in ipairs(r.findings) do
       out[#out + 1] = string.format(" %d. %s", f.n, f.text)
     end
-  elseif r.kind == "review" and r.status == "done" and not r.verdict then
-    out[#out + 1] = "Note: report tail was unparsable; raw review text follows."
+  elseif r.kind == "review" and r.status == "done"
+    and (not r.verdict
+      or (not r.summary and not next(r.findings or {}))) then
+    out[#out + 1] = "Note: report tail was unparsable or only partially parsed; raw review text follows."
     out[#out + 1] = (r.raw or ""):gsub("%s+$", "")
   end
   out[#out + 1] = "Chain: " .. fmt_chain(r.chain)
@@ -327,7 +413,9 @@ function M.format_coverage(coverage, uncovered)
         end
       else
         specialists[1] = c.specialist or "-"
-        local v = c.verdict or "unparsed"
+        -- no reviewer for this path at all, not a review that failed to
+        -- parse: match reviews_lookup's wording
+        local v = c.verdict or "UNREVIEWED"
         if c.cached then
           v = v .. " (CACHED)"
         end
