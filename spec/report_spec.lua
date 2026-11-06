@@ -21,6 +21,18 @@ function TestReport:test_verdict_request_changes_with_a_space()
   lu.assertEquals(Report.parse_verdict("verdict: Request Changes"), "request-changes")
 end
 
+function TestReport:test_verdict_prose_prefix_with_markdown_decoration()
+  lu.assertEquals(Report.parse_verdict("Review verdict: **approve**"), "approve")
+end
+
+function TestReport:test_verdict_prose_prefix_lowercase()
+  lu.assertEquals(Report.parse_verdict("review verdict: approve"), "approve")
+end
+
+function TestReport:test_verdict_capitalised_word_mid_line()
+  lu.assertEquals(Report.parse_verdict("Final Verdict: request-changes"), "request-changes")
+end
+
 function TestReport:test_verdict_unknown_token_is_unparsable()
   lu.assertEquals(Report.parse_verdict("VERDICT: maybe"), nil)
   lu.assertEquals(Report.parse_verdict("VERDICT: approved-ish"), nil)

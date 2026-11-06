@@ -94,7 +94,7 @@ function M.parse_verdict(text)
     local value = line:match("^%s*%**[Vv][Ee][Rr][Dd][Ii][Cc][Tt]%**%s*:%s*(.-)%s*$")
     if value == nil then
       -- also match when the line has leading markdown or prose
-      value = line:match("V%s*E%s*R%s*D%s*I%s*C%s*T%s*%*?%s*:%s*(%S+.-)%s*$")
+      value = line:match("[Vv]%s*[Ee]%s*[Rr]%s*[Dd]%s*[Ii]%s*[Cc]%s*[Tt]%s*%*?%s*:%s*(%S+.-)%s*$")
     end
     if value then
       local token = strip_markdown(value):gsub("%.$", ""):gsub("%s+", " "):lower()
