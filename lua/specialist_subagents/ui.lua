@@ -51,9 +51,6 @@ function M.render(buf, cwd, dispatch_state)
       if s.delegate.reviews then
         d[#d + 1] = "reviews"
       end
-      if #s.delegate.tasks > 0 then
-        d[#d + 1] = "tasks: " .. table.concat(s.delegate.tasks, ", ")
-      end
       if #d > 0 then
         extra[#extra + 1] = "delegates: " .. table.concat(d, " ")
       end

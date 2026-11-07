@@ -165,7 +165,7 @@ end
 
 -- Validate an `action` request. Pure. `status` is a read-only query and is
 -- allowed from any invoker; `message`/`stop` act on live sessions and are
--- main-only, like task delegation.
+-- main-only, like task dispatches.
 function M.action_error(input, invoker)
   local action = type(input) == "table" and input.action or nil
   if action ~= "status" and action ~= "message" and action ~= "stop" then
@@ -328,18 +328,6 @@ end
 -- Policy engine
 -- ---------------------------------------------------------------------------
 
-local function task_hops(chain, exclude_name)
-  local n = 0
-  for _, hop in ipairs(chain or {}) do
-    -- exclude the invoker's own hop: the chain includes self, and an
-    -- implementer's own task dispatch must not block its own children
-    if hop.kind == "task" and hop.name ~= exclude_name then
-      n = n + 1
-    end
-  end
-  return n
-end
-
 local function chain_names(chain)
   local set = {}
   for _, hop in ipairs(chain or {}) do
@@ -371,28 +359,27 @@ function M.check_policy(target, spec, invoker)
     return kind, nil
   end
 
+  -- Kind/type consistency. Review-type specialists are leaves and can only
+  -- run as reviews; and from a nested session, only review-type targets are
+  -- on offer, so kind relabelling cannot re-open nested task dispatch by
+  -- dressing an implementation specialist up as kind = "review".
+  if spec.type == "review" and kind ~= "review" then
+    return nil, target.specialist .. " is a review-type specialist; only kind = \"review\" dispatches are valid"
+  end
+  if invoker.name ~= "main" and kind == "review" and spec.type ~= "review" then
+    return nil, "nested dispatches may only target review-type specialists: route implementation work through the orchestrator"
+  end
+
   if kind == "review" then
     if depth > Config.review_max_depth then
       return nil, string.format(
         "review depth %d exceeds review_max_depth %d", depth, Config.review_max_depth)
     end
   else
-    -- task request: from main, or from an implementation specialist at
-    -- impl-depth 0 whose delegate.tasks allowlist names the target.
-    if task_hops(invoker.chain, invoker.name) > 0 then
-      return nil, "task delegation is capped at one nested level (impl chain cap)"
-    end
+    -- task requests are main-only: cross-discipline routing is the
+    -- orchestrator's job (fan-out); a specialist only ever reports gaps back.
     if invoker.name ~= "main" then
-      local allow = invoker.delegate and invoker.delegate.tasks or {}
-      local ok = false
-      for _, name in ipairs(allow) do
-        if name == target.specialist then
-          ok = true
-        end
-      end
-      if not ok then
-        return nil, target.specialist .. " is not in this specialist's delegate.tasks allowlist"
-      end
+      return nil, "task dispatches are main-only: route cross-discipline work through the orchestrator, not a nested dispatch"
     end
   end
   return kind, nil
@@ -754,8 +741,9 @@ local function drop_claim(owner)
   end
 end
 
--- Review-type targets a nested delegate tool may call, plus the allowlisted
--- task targets. The generated description enumerates exactly these.
+-- Review-type targets a nested delegate tool may call, offered only when
+-- the invoker sets `delegate = { reviews = true }`. The generated
+-- description enumerates exactly these.
 local function nested_allowed_targets(cwd, spec)
   local catalog = Registry.catalog(cwd)
   local allowed = {}
@@ -767,15 +755,6 @@ local function nested_allowed_targets(cwd, spec)
           description = s.description,
         }
       end
-    end
-  end
-  for _, name in ipairs((spec.delegate and spec.delegate.tasks) or {}) do
-    local s = catalog[name]
-    if s then
-      allowed[#allowed + 1] = {
-        name = name, kind = "task", default_kind = "task",
-        description = s.description,
-      }
     end
   end
   table.sort(allowed, function(a, b)
@@ -939,7 +918,7 @@ local function run_target(ctx, target, invoker, call)
     brief = target.brief,
   }
   local local_tools
-  if kind == "task" and spec.delegate and (spec.delegate.reviews or #spec.delegate.tasks > 0) then
+  if kind == "task" and spec.delegate and spec.delegate.reviews then
     local allowed = nested_allowed_targets(cwd, spec)
     local child_invoker = {
       name = spec.name,
@@ -951,7 +930,6 @@ local function run_target(ctx, target, invoker, call)
         c[#c + 1] = { name = spec.name, kind = kind }
         return c
       end)(),
-      delegate = spec.delegate,
     }
     local_tools = SB.build_local_delegate(ctx, child_invoker, allowed, function(input, inner_invoker)
       return M.handle(ctx, input, inner_invoker or child_invoker)

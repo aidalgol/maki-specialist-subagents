@@ -186,6 +186,7 @@ function M.preamble(spec, kind, invocation)
     out[#out + 1] = table.concat({
       "This is a task invocation: do the work, not a review of it.",
       "End your final report with a short structured summary: what changed (files), what you verified, and anything left undone.",
+      "If you discover work outside your brief -- files you were not asked to touch, or another specialist's discipline -- do not attempt it and cannot delegate it: finish what you were dispatched for, and flag the gap in your report so the orchestrator can route it.",
     }, "\n")
   end
   return table.concat(out, "\n\n")
@@ -300,17 +301,17 @@ function M.open_session(ctx, spec, kind, invocation, cwd, local_tools)
   return sess
 end
 
--- The nested delegate local tool for implementation sessions. Its schema and
--- description enumerate only the targets this invoker may call, so the model
--- cannot even attempt violations; the handler enforces the same policy again
--- at dispatch time.
+-- The nested review-delegation local tool for implementation sessions. Its
+-- schema and description enumerate only the review targets this invoker may
+-- call, so the model cannot even attempt violations; the handler enforces
+-- the same policy again at dispatch time.
 function M.build_local_delegate(ctx, invoker, allowed_targets, run_dispatch)
   if #allowed_targets == 0 then
     return nil
   end
   local target_names = {}
   for _, t in ipairs(allowed_targets) do
-    target_names[#target_names + 1] = t.name .. " (" .. t.kind .. ")"
+    target_names[#target_names + 1] = t.name .. " (review)"
   end
   local properties = {}
   for _, t in ipairs(allowed_targets) do
@@ -319,7 +320,6 @@ function M.build_local_delegate(ctx, invoker, allowed_targets, run_dispatch)
       description = t.description,
       properties = {
         brief = { type = "string", description = "Self-contained brief for the specialist." },
-        kind = { type = "string", enum = { "review", "task" }, description = "Defaults to " .. t.default_kind .. "." },
         scope = {
           type = "object",
           description = "Review scope: { files = {glob,...}, basis = \"changed\"|\"plan\"|\"files\" } (files: explicit paths/globs resolved against the working tree).",
@@ -328,7 +328,6 @@ function M.build_local_delegate(ctx, invoker, allowed_targets, run_dispatch)
             basis = { type = "string", enum = { "changed", "plan", "files" } },
           },
         },
-        claims = { type = "array", items = { type = "string" }, description = "Path globs this task will touch." },
         force_review = { type = "boolean", description = "Re-run a cached review." },
       },
       required = { "brief" },
@@ -341,11 +340,23 @@ function M.build_local_delegate(ctx, invoker, allowed_targets, run_dispatch)
   }
   return {
     delegate = {
-      description = "Delegate work to specialist subagents. You may call: "
+      description = "Delegate a review of your work to specialist subagents. You may call: "
         .. table.concat(target_names, ", ")
         .. ". Every call runs the same harness pipeline as the top-level tool (policy, budgets, ledger, cache).",
       input_schema = schema,
       handler = function(input)
+        -- The schema offers one key per allowed target; translate that keyed
+        -- form into the scalar form the dispatch pipeline normalizes.
+        if type(input) == "table" and input.specialist == nil and input.targets == nil then
+          for _, t in ipairs(allowed_targets) do
+            local body = input[t.name]
+            if type(body) == "table" then
+              body.specialist = t.name
+              input = body
+              break
+            end
+          end
+        end
         return run_dispatch(input, invoker)
       end,
     },

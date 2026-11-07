@@ -40,7 +40,7 @@ local TOP_LEVEL_KEYS = {
 local MODEL_KEYS = { tier = true, spec = true }
 local TOOLS_KEYS = { only = true, except = true }
 local REVIEW_KEYS = { files = true }
-local DELEGATE_KEYS = { reviews = true, tasks = true }
+local DELEGATE_KEYS = { reviews = true }
 
 local function unknown_keys(warnings, name, prefix, tbl, allowed)
   for k in pairs(tbl) do
@@ -179,10 +179,10 @@ function M.validate(def)
     end
     norm.delegate = nil
   else
-    local delegate = { reviews = false, tasks = {} }
+    local delegate = { reviews = false }
     if def.delegate ~= nil then
       if type(def.delegate) ~= "table" then
-        return fail("delegate must be a table { reviews = bool, tasks = {...} }")
+        return fail("delegate must be a table { reviews = bool }")
       end
       unknown_keys(warnings, def.name, "delegate.", def.delegate, DELEGATE_KEYS)
       if def.delegate.reviews ~= nil then
@@ -190,12 +190,6 @@ function M.validate(def)
           return fail("delegate.reviews must be a boolean")
         end
         delegate.reviews = def.delegate.reviews
-      end
-      if def.delegate.tasks ~= nil then
-        if not is_string_array(def.delegate.tasks) then
-          return fail("delegate.tasks must be an array of specialist names")
-        end
-        delegate.tasks = def.delegate.tasks
       end
     end
     norm.delegate = delegate

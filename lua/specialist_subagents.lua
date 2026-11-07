@@ -133,7 +133,9 @@ maki.api.register_tool({
   name = "delegate",
   description = [[Dispatch work to specialist subagents (defined in .maki/lua/specialists/ and ~/.config/maki/lua/specialists/). Scalar form: one specialist; list form: `targets` fans out in parallel and returns one aggregated report.
 
-Use it to delegate reviews of a change set (reviews are content-addressed: unchanged content returns the recorded verdict instantly, and an identical in-flight review is joined instead of duplicated), to delegate implementation tasks to implementation-type specialists, and — with kind = "consult" — to ask a specialist a question (main-only; no review contract, nothing recorded). Every dispatch runs a harness pipeline: cycle/depth/allowlist policy, budgets, path claims, and a review ledger shared across the session.
+Use it to delegate reviews of a change set (reviews are content-addressed: unchanged content returns the recorded verdict instantly, and an identical in-flight review is joined instead of duplicated), to delegate implementation tasks to implementation-type specialists, and — with kind = "consult" — to ask a specialist a question (main-only; no review contract, nothing recorded). Every dispatch runs a harness pipeline: cycle/depth policy, budgets, path claims, and a review ledger shared across the session.
+
+Task dispatches are main-only: cross-discipline routing (which specialist changes which files) is yours; nested dispatches are reviews of the invoker's own work.
 
 Prefer one `targets` call over several sequential ones when several independent specialists apply. For long fan-outs, `background = true` returns a receipt immediately and delivers the aggregate report as a message when done — do not re-dispatch in the meantime; `action` ("status"/"message"/"stop") queries or reaches the specialists of in-flight dispatches.]],
   schema = DELEGATE_SCHEMA,
@@ -233,6 +235,7 @@ maki.api.register_prompt_hint({
       "- Resolve a report's UNCOVERED lines (changed files no dispatched scope covered) before declaring a review pass; `specialist_reviews` shows prior coverage cheaply.",
       "- Fix<->re-review rounds are capped per specialist and scope; change the content or accept the findings instead of re-dispatching.",
       "- Task dispatches to implementation specialists record path claims; overlapping claims warn (or refuse under strict_claims).",
+      "- Cross-discipline routing is yours: fan out to several specialists in one `targets` call instead of having one specialist dispatch another. Nested delegation is review-only (an implementer may have its own changes reviewed); a specialist that finds work outside its brief reports it back for you to route.",
       "- Long fan-outs can run in the background: background = true returns a receipt immediately and the aggregate report arrives as a message — do not re-dispatch (the ledger dedups and joins anyway). action = \"status\"/\"message\"/\"stop\" operates on in-flight dispatches.",
       "- To review explicit working-tree content (e.g. a clean tree), use scope.basis = \"files\" with explicit paths/globs instead of filtering changed files.",
       "- When you need judgement rather than a diff review, consult instead of forcing a review: kind = \"consult\" asks a specialist a question (main-only; no review contract, nothing recorded).",

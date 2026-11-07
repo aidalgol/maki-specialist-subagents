@@ -114,12 +114,11 @@ return {
 One more field, valid only when `type = "implementation"`:
 
 ```lua
-  delegate = {
-    -- true lets the specialist invoke any review specialist on its changes.
-    reviews = true,
-    -- Implementation specialists it may delegate tasks to, by name.
-    tasks = { "component-implementer" },
-  },
+  -- true lets the specialist have any review specialist review its own
+  -- changes. Nested delegation exists for this fix<->re-review loop;
+  -- cross-discipline routing is the orchestrator's job (fan-out), so
+  -- `kind = "task"` dispatches from a nested session are refused.
+  delegate = { reviews = true },
 ```
 
 On a `review`-type specialist, `delegate` is ignored and produces a discovery
@@ -202,10 +201,14 @@ can live within:
   touch. Overlapping claims from active siblings warn, or are rejected when
   `strict_claims` is on.
 - **Budgets.** Defaults: `max_active` 6 concurrent sessions per fan-out,
-  `per_turn_budget` 16 dispatches per call, review nesting depth 2,
-  implementation delegation depth 1 (a delegated specialist cannot delegate
-  further), and a fix-to-re-review iteration cap of 3. Every budget is
-  enforced in the dispatch handler, never in prompt text.
+  `per_turn_budget` 16 dispatches per call, review nesting depth 2, and a
+  fix-to-re-review iteration cap of 3. Every budget is enforced in the
+  dispatch handler, never in prompt text.
+- **Nested delegation is review-only.** `kind = "task"` dispatches are
+  main-only. Cross-discipline routing (which specialist changes which files)
+  is the orchestrator's job: fan out over `targets`. A specialist that finds
+  work outside its brief reports the gap back instead of dispatching; a
+  delegated specialist may only have its own changes reviewed.
 - **Background dispatches.** `background = true` returns a receipt
   immediately; the aggregated report arrives as a message when the fan-out
   completes. Main-only.

@@ -93,13 +93,11 @@ One additional field that is valid only when `type = "implementation"`.
 return {
   -- ...
 
-  delegate = {
-    -- Allow the specialist to invoke *any* reviewer specialist to review its
-    -- changes.
-    reviews = true,
-    -- Implementation specialists to which the specialist may delegate.
-    tasks = { "component-implementer" }
-  },
+  -- Allow the specialist to have any reviewer specialist review its own
+  -- changes. Nested delegation exists for this fix<->re-review loop;
+  -- cross-discipline routing is the orchestrator's job, so `kind = "task"`
+  -- dispatches from a nested session are refused.
+  delegate = { reviews = true },
 }
 ```
 
@@ -140,9 +138,10 @@ security mechanism. You can remove any tools via the specialist table field
 #### Implementation
 
 When `type = "implementation"`, the specialist has the full `general_sub`
-toolset, minus interactive tools, plus the nested `delegate` local tool per the
-`delegate` policy. `batch`, `code_execution`, and `task` are always excluded
-(their permission cost exceeds this plugin's grants).
+toolset, minus interactive tools, plus a nested review-delegation local tool
+when `delegate.reviews` is set (`kind = "task"` is main-only). `batch`,
+`code_execution`, and `task` are always excluded (their permission cost
+exceeds this plugin's grants).
 
 ## Background dispatches and in-flight actions
 
@@ -320,7 +319,6 @@ require("specialist_subagents").setup({
   max_active = 6,          -- concurrent specialist sessions
   per_turn_budget = 16,    -- delegations per tool call (every target counts)
   review_max_depth = 2,    -- nested review depth cap
-  impl_chain_max = 1,      -- implementation delegation depth
   iteration_cap = 3,       -- fix<->re-review rounds per (implementer, reviewer, scope)
   strict_claims = false,   -- reject overlapping path claims instead of warning
   ledger_cap = 500,        -- persisted review ledger entries per project
@@ -357,10 +355,11 @@ manual testing.
    table.
 3. Repeat the same review — expect `CACHED REVIEW` with zero session spend.
 4. Dispatch an implementation task to `test-engineer`; confirm it lands a
-   passing spec in `spec/` and that its local `delegate` tool offers only
-   review targets plus its allowlisted tasks.
-5. Ask a task-delegated specialist to task-delegate further — expect a
-   refusal from the harness, not from a prompt.
+   passing spec in `spec/` and confirm its local `delegate` tool offers only
+   its enabled review targets (`delegate.reviews`).
+5. Ask a delegated specialist to dispatch a task — expect a refusal from the
+   harness, not from a prompt; work outside its brief comes back as a flagged
+   gap in its report.
 6. Run two identical reviews concurrently from two calls — expect one
    `JOINED IN-FLIGHT SESSION` result.
 7. Ask for a background review fan-out (`background = true`); confirm the

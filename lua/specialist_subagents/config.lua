@@ -22,9 +22,6 @@ local M = {
   -- How deep a review invocation may nest (review chains terminate by
   -- construction: review-only types are leaves without a delegate tool).
   review_max_depth = 2,
-  -- Implementation delegation depth: a specialist delegated by a specialist
-  -- gets no task-delegation capability at all.
-  impl_chain_max = 1,
   -- Default cap on fix<->re-review rounds per (implementer, reviewer, scope);
   -- a reviewer's own `max_iterations` overrides it.
   iteration_cap = 3,

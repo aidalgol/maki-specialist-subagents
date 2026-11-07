@@ -44,4 +44,45 @@ function TestSessionBuilder:test_consult_preamble_advisory_framing_no_review_con
   lu.assertTrue(review_preamble():find("VERDICT", 1, true) ~= nil)
 end
 
+-- The nested delegate tool translates the schema's keyed form
+-- ({ ["<target-name>"] = { brief = ... } }) into the scalar form the dispatch
+-- pipeline normalizes, and only for targets this invoker is allowed to call;
+-- anything else reaches run_dispatch untouched and is refused there.
+function TestSessionBuilder:test_local_delegate_keyed_input_translates_to_scalar_dispatch()
+  local captured
+  local tool = SB.build_local_delegate(
+    nil, -- ctx is unused by the local delegate; the translation is pure
+    { name = "test-engineer", chain = {} },
+    { { name = "scss-reviewer", description = "d" } },
+    function(input, invoker)
+      captured = { input = input, invoker = invoker }
+      return { llm_output = "dispatched" }
+    end)
+  local res = tool.delegate.handler({ ["scss-reviewer"] = { brief = "review my work" } })
+  lu.assertEquals(res.llm_output, "dispatched")
+  lu.assertEquals(captured.input.specialist, "scss-reviewer")
+  lu.assertEquals(captured.input.brief, "review my work")
+  lu.assertEquals(captured.input.targets, nil)
+  lu.assertEquals(captured.invoker.name, "test-engineer")
+end
+
+function TestSessionBuilder:test_local_delegate_keyed_input_for_unallowed_target_passes_through_untouched()
+  local captured
+  local tool = SB.build_local_delegate(
+    nil,
+    { name = "test-engineer", chain = {} },
+    { { name = "scss-reviewer", description = "d" } },
+    function(input)
+      captured = input
+      return { llm_output = "error: refused", is_error = true }
+    end)
+  local keyed = { ["rogue-specialist"] = { brief = "sneak past the schema" } }
+  local res = tool.delegate.handler(keyed)
+  lu.assertEquals(res.is_error, true)
+  lu.assertEquals(captured, keyed, "input reaches run_dispatch unchanged")
+  lu.assertEquals(captured.specialist, nil,
+    "a key outside allowed_targets is never translated into a specialist dispatch")
+  lu.assertEquals(captured.targets, nil)
+end
+
 return TestSessionBuilder

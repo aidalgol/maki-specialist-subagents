@@ -108,20 +108,29 @@ function TestSpec:test_validate_review_type_ignores_delegate_with_a_warning()
 end
 
 function TestSpec:test_validate_implementation_delegate_defaults_and_validation()
-  local norm = Spec.validate(minimal({ type = "implementation" }))
-  lu.assertEquals(norm.delegate, { reviews = false, tasks = {} })
+  local norm, err, warnings = Spec.validate(minimal({ type = "implementation" }))
+  lu.assertEquals(err, nil)
+  lu.assertEquals(norm.delegate, { reviews = false })
   norm = Spec.validate(minimal({
     type = "implementation",
-    delegate = { reviews = true, tasks = { "reviewer" } },
+    delegate = { reviews = true },
   }))
+  lu.assertEquals(err, nil)
   lu.assertEquals(norm.delegate.reviews, true)
-  lu.assertEquals(norm.delegate.tasks, { "reviewer" })
   lu.assertEquals(Spec.validate(minimal({
     type = "implementation", delegate = { reviews = "yes" },
   })), nil)
-  lu.assertEquals(Spec.validate(minimal({
-    type = "implementation", delegate = { tasks = { 1 } },
-  })), nil)
+  -- Legacy delegate.tasks keys still validate, warn as unknown keys, and
+  -- are dropped from the normalized delegate.
+  norm, err, warnings = Spec.validate(minimal({
+    type = "implementation",
+    delegate = { tasks = { "reviewer" } },
+  }))
+  lu.assertEquals(err, nil)
+  lu.assertEquals(norm.delegate, { reviews = false })
+  lu.assertEquals(norm.delegate.tasks, nil)
+  lu.assertEquals(#warnings, 1)
+  lu.assertStrContains(warnings[1], "delegate.tasks")
 end
 
 function TestSpec:test_validate_max_iterations()

@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- Dispatch pure surface: input normalization and the policy engine
--- (cycle checks, depth caps, task allowlists, impl chain cap).
+-- (cycle checks, review depth cap, main-only task/consult dispatches).
 
 local lu = require("luaunit")
 
@@ -89,50 +89,28 @@ function TestDispatch:test_policy_review_depth_cap()
   lu.assertTrue(ok_policy({ specialist = "scss-reviewer", brief = "b" }, review_spec, mid))
 end
 
-function TestDispatch:test_policy_task_delegation_needs_the_allowlist()
+function TestDispatch:test_policy_nested_task_dispatch_is_refused_main_only()
+  -- Nested (non-main) invokers can no longer task-dispatch, allowlisted or
+  -- not: kind = "task" dispatches are main-only.
   local invoker = { name = "test-engineer", chain = {} }
   local target = { specialist = "component-implementer", brief = "b" }
   local ok, err = ok_policy(target, impl_spec, invoker)
   lu.assertEquals(ok, false)
-  lu.assertStrContains(err, "allowlist")
-  local with_allow = { name = "test-engineer", chain = {}, delegate = { tasks = { "component-implementer" } } }
-  lu.assertTrue(ok_policy(target, impl_spec, with_allow))
+  lu.assertStrContains(err, "main-only")
+  lu.assertStrContains(err, "task dispatches are main-only")
 end
 
-function TestDispatch:test_policy_impl_chain_cap_task_delegated_specialists_cannot_task_delegate()
+function TestDispatch:test_policy_nested_review_dispatch_still_passes_without_a_delegate_field()
+  -- The same invoker shape can still dispatch a review-type specialist;
+  -- the invoker carries no delegate field (nested delegation is review-only).
+  local invoker = { name = "test-engineer", chain = {} }
+  lu.assertTrue(ok_policy({ specialist = "scss-reviewer", brief = "b" }, review_spec, invoker))
+  -- A nested implementer (itself task-delegated) can still request a review
   local nested = {
     name = "impl",
     chain = { { name = "test-engineer", kind = "task" } },
-    delegate = { tasks = { "anything" } },
   }
-  local ok, err = ok_policy({ specialist = "anything", brief = "b" }, impl_spec, nested)
-  lu.assertEquals(ok, false)
-  lu.assertStrContains(err, "impl chain cap")
-  -- review delegation still works from the same invoker (depth 2)
   lu.assertTrue(ok_policy({ specialist = "scss-reviewer", brief = "b" }, review_spec, nested))
-end
-
-function TestDispatch:test_policy_an_implementer_s_own_hop_does_not_block_its_task_delegation()
-  -- real shape: the child invoker's chain ends with its own dispatch hop
-  local child = {
-    name = "test-engineer",
-    chain = { { name = "test-engineer", kind = "task" } },
-    delegate = { tasks = { "component-implementer" } },
-  }
-  lu.assertTrue(ok_policy({ specialist = "component-implementer", brief = "b" }, impl_spec, child),
-    "impl-depth 0 implementer task-delegates its allowlisted target")
-  -- a specialist that was itself delegated by a specialist cannot
-  local grandchild = {
-    name = "component-implementer",
-    chain = {
-      { name = "test-engineer", kind = "task" },
-      { name = "component-implementer", kind = "task" },
-    },
-    delegate = { tasks = { "anything" } },
-  }
-  local ok, err = ok_policy({ specialist = "anything", brief = "b" }, impl_spec, grandchild)
-  lu.assertEquals(ok, false)
-  lu.assertStrContains(err, "impl chain cap")
 end
 
 function TestDispatch:test_policy_kind_defaults_follow_the_specialist_type()
@@ -143,6 +121,48 @@ function TestDispatch:test_policy_kind_defaults_follow_the_specialist_type()
   lu.assertEquals(kind, "task")
   kind = Dispatch.check_policy({ specialist = "x", brief = "b", kind = "review" }, impl_spec, main)
   lu.assertEquals(kind, "review", "explicit kind overrides the type default")
+end
+
+function TestDispatch:test_policy_nested_kind_review_relabel_of_implementation_specialist_is_refused()
+  -- A nested invoker cannot re-open nested task dispatch by dressing an
+  -- implementation specialist up as kind = "review".
+  local invoker = { name = "test-engineer", chain = {} }
+  local ok, err = ok_policy(
+    { specialist = "component-implementer", brief = "b", kind = "review" },
+    impl_spec, invoker)
+  lu.assertEquals(ok, false)
+  lu.assertStrContains(err, "review-type specialists")
+end
+
+function TestDispatch:test_policy_review_type_specialist_refuses_non_review_kind()
+  -- Review-type specialists are leaves: only kind = "review" dispatches are
+  -- valid for them, even from main.
+  local main = { name = "main", chain = {} }
+  local ok, err = ok_policy(
+    { specialist = "scss-reviewer", brief = "b", kind = "task" }, review_spec, main)
+  lu.assertEquals(ok, false)
+  lu.assertStrContains(err, 'only kind = "review"')
+end
+
+function TestDispatch:test_policy_main_explicit_review_kind_on_implementation_specialist_still_passes()
+  -- Main invoking an implementation specialist in review mode is legitimate
+  -- (the kind default test pins the returned kind; this pins acceptance).
+  local main = { name = "main", chain = {} }
+  lu.assertTrue(ok_policy(
+    { specialist = "component-implementer", brief = "b", kind = "review" },
+    impl_spec, main))
+end
+
+function TestDispatch:test_policy_nested_review_kind_on_review_type_specialist_still_passes()
+  -- The nested review-only rule must not swallow legitimate nested reviews
+  -- that name their kind explicitly.
+  local invoker = {
+    name = "impl",
+    chain = { { name = "test-engineer", kind = "task" } },
+  }
+  lu.assertTrue(ok_policy(
+    { specialist = "scss-reviewer", brief = "b", kind = "review" },
+    review_spec, invoker))
 end
 
 -- Regression: the recent-finished handoff lives on the plugin-lifetime
@@ -269,11 +289,10 @@ function TestDispatch:test_policy_consults_are_main_only_but_run_on_both_special
   local ok, err = ok_policy({ specialist = "x", brief = "b", kind = "consult" }, impl_spec, nested)
   lu.assertEquals(ok, false)
   lu.assertStrContains(err, "main-only")
-  -- even a main-chain implementer (impl-depth 0, allowlisted) cannot consult
+  -- even a main-chain implementer cannot consult
   local child = {
     name = "test-engineer",
     chain = { { name = "test-engineer", kind = "task" } },
-    delegate = { tasks = { "x" } },
   }
   ok, err = ok_policy({ specialist = "x", brief = "b", kind = "consult" }, impl_spec, child)
   lu.assertEquals(ok, false)
