@@ -7,12 +7,25 @@
 -- delegate local tool.
 --
 -- Grant-vs-toolset accounting: the plugin holds exactly agent, fs_read,
--- fs_write, run, net. Tools that cost more than that are excluded from every
--- specialist session: `batch`/`code_execution` (declare no permission, so
--- they cost every permission except agent) and `task` (hands over the whole
--- chat, every permission). `question` is interactive-only. If maki still refuses to
--- open a session because a handed-over tool's bank exceeds our grants, the
--- builder retries with the over-cost tools dropped. The plugin holds `net`,
+-- fs_write, run, net. Two classes of tool are excluded from every specialist
+-- session:
+--
+-- * Over-cost containers: `batch`/`code_execution` (declare no permission,
+--   so they cost every permission except agent) and `task` (hands over the
+--   whole chat, every permission).
+-- * Capability-less built-ins: `skill`, `todo_write`, `memory`,
+--   `view_image`, `task_stop`, `task_message` declare no capability at all,
+--   which prices the session at every permission the plugin does not hold.
+--   Excluding `skill` is safe: skill bodies are injected into the system
+--   prompt at dispatch time by the plugin itself, not loaded by the sub
+--   session's own `skill` tool.
+--
+-- `question` is interactive-only. If maki still refuses to open a session
+-- because a handed-over tool's bank exceeds our grants, the builder retries
+-- down a ladder: each refusal names one offending tool, which is dropped
+-- (falling back to the over-cost containers) and the open retried, until the
+-- session opens or nothing droppable remains; on success a single warning
+-- reports every dropped tool. The plugin holds `net`,
 -- so the native `webfetch`/`websearch` tools are handed over like any other
 -- tool; whether web calls are allowed is maki's permission machinery.
 local function req(dotted, sibling)
@@ -35,6 +48,12 @@ local NEVER = {
   question = "interactive; sub sessions have no answerer",
   delegate = "the orchestrator tool; nested delegation uses generated local tools",
   specialist_reviews = "orchestrator-side ledger query",
+  skill = "declares no capability: prices the session at every permission the plugin does not hold",
+  todo_write = "declares no capability: prices the session at every permission the plugin does not hold",
+  memory = "declares no capability: prices the session at every permission the plugin does not hold",
+  view_image = "declares no capability: prices the session at every permission the plugin does not hold",
+  task_stop = "declares no capability: prices the session at every permission the plugin does not hold",
+  task_message = "declares no capability: prices the session at every permission the plugin does not hold",
 }
 
 -- Review-type defaults: read tools plus bash and web tools. Arbitrary
@@ -61,17 +80,19 @@ local function clamp_tool_names(defs, allowed)
 end
 
 -- Assemble the tool definitions for one specialist session.
--- `kind` selects the envelope, not the specialist.
 function M.tool_defs(ctx, spec, kind)
   local defs, err = maki.agent.tools(ctx, { audience = "general_sub" })
   if not defs then
     return nil, err
   end
-  local by_name = {}
-  for _, def in ipairs(defs) do
-    by_name[def.name] = def
-  end
+  return M.select_tool_defs(defs, spec, kind)
+end
 
+-- Pure toolset selection: NEVER (review and consult invocations use
+-- REVIEW_DEFAULT_TOOLS instead), then explicit per-specialist refinement
+-- (`spec.tools.only` / `spec.tools.except`), clamped to the defs actually
+-- on offer. `kind` selects the envelope, not the specialist.
+function M.select_tool_defs(defs, spec, kind)
   local allowed = {}
   -- consults run the review tool set regardless of spec.type (advisory,
   -- fs_write-free envelope; spec.tools still refines it)
@@ -101,6 +122,49 @@ function M.tool_defs(ctx, spec, kind)
   end
 
   return clamp_tool_names(defs, allowed)
+end
+
+-- Extract the offending tool name from maki's capability-less refusal
+-- (lenient about surrounding text), e.g.
+-- `session open failed: tool 'skill' declares no capability, ...`.
+function M.parse_capability_less(err)
+  if type(err) ~= "string" then
+    return nil
+  end
+  return err:match("tool '([^']+)' declares no capability")
+end
+
+local function drop_one(defs, name)
+  local reduced = {}
+  for _, def in ipairs(defs) do
+    if def.name ~= name then
+      reduced[#reduced + 1] = def
+    end
+  end
+  return reduced
+end
+
+-- One step of the open_session retry ladder: drop the tool the error named
+-- if we hold it, otherwise drop the first remaining over-cost container.
+-- Returns the reduced defs and the dropped name, or nil when nothing can be
+-- dropped (ladder exhausted).
+function M.reduce_defs_on_error(defs, err)
+  local target = M.parse_capability_less(err)
+  if target then
+    for _, def in ipairs(defs) do
+      if def.name == target then
+        return drop_one(defs, target), target
+      end
+    end
+  end
+  for _, name in ipairs(OVER_COST) do
+    for _, def in ipairs(defs) do
+      if def.name == name then
+        return drop_one(defs, name), name
+      end
+    end
+  end
+  return nil, nil
 end
 
 -- Deterministic skill loading: each named skill's body is resolved through
@@ -243,8 +307,10 @@ local function resolve_model_spec(ctx, spec)
   return model.spec, nil
 end
 
--- Open the session. Retries with progressively reduced tool sets if maki
--- refuses because a handed-over tool costs permissions the plugin lacks.
+-- Open the session. If maki refuses because a handed-over tool costs
+-- permissions the plugin lacks, retry down a ladder that drops the refused
+-- tool first (falling back to the over-cost containers) until the session
+-- opens or nothing droppable remains.
 function M.open_session(ctx, spec, kind, invocation, cwd, local_tools)
   local defs, err = M.tool_defs(ctx, spec, kind)
   if not defs then
@@ -272,27 +338,38 @@ function M.open_session(ctx, spec, kind, invocation, cwd, local_tools)
     })
   end
 
+  local function permission_error(err)
+    return type(err) == "string"
+      and (err:find("permission", 1, true) ~= nil or err:find("granted", 1, true) ~= nil)
+  end
+
   local sess, oerr = open(defs)
-  if not sess and type(oerr) == "string"
-    and (oerr:find("permission", 1, true) or oerr:find("granted", 1, true)) then
-    -- drop over-cost tools and retry, then only fs/run/none tools
-    local reduced = {}
-    for _, def in ipairs(defs) do
-      local over = false
-      for _, name in ipairs(OVER_COST) do
-        if def.name == name then
-          over = true
-        end
+  if not sess and permission_error(oerr) then
+    -- Retry ladder: the host names one offending tool per refusal; drop it
+    -- and retry until the session opens or nothing droppable remains.
+    local current, dropped = defs, {}
+    for _ = 1, #defs do
+      local reduced, name = M.reduce_defs_on_error(current, oerr)
+      if not reduced then
+        break
       end
-      if not over then
-        reduced[#reduced + 1] = def
+      dropped[#dropped + 1] = name
+      current = reduced
+      sess, oerr = open(current)
+      if sess or not permission_error(oerr) then
+        break
       end
     end
-    if #reduced < #defs then
-      maki.log.warn(string.format(
-        "specialist-subagents: session for %q refused with full tool set (%s); retrying with %d tool(s)",
-        spec.name, tostring(oerr), #reduced))
-      sess, oerr = open(reduced)
+    if #dropped > 0 then
+      if sess then
+        maki.log.warn(string.format(
+          "specialist-subagents: session for %q opened with tool(s) dropped: %s",
+          spec.name, table.concat(dropped, ", ")))
+      else
+        return nil, string.format(
+          "specialist-subagents: session for %q refused even without %s; last host error: %s",
+          spec.name, table.concat(dropped, ", "), tostring(oerr))
+      end
     end
   end
   if not sess then
