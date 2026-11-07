@@ -6,11 +6,11 @@ SPDX-License-Identifier: MIT
 
 # Maki `specialist-subagents`
 
-Maki plugin for defining custom specialist subagents for with
-delegation-workflow support that goes beyond "just spawn a subagent": a two-type
-specialist system, harness-enforced nested delegation, a content-addressed
-review ledger that deduplicates reviews, and budgets that make delegation trees
-safe instead of forbidden.
+Maki plugin for defining custom specialist subagents with delegation-workflow
+support that goes beyond "just spawn a subagent": a two-type specialist system,
+harness-enforced nested delegation, a content-addressed review ledger that
+deduplicates reviews, and budgets that make delegation trees safe instead of
+forbidden.
 
 ## What it gives you
 
