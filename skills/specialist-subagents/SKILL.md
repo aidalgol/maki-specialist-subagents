@@ -137,9 +137,14 @@ Default tools depend on `type`:
   mechanism. Narrow it with `tools.except` if a reviewer does not need web
   access.
 - **implementation**: the full `general_sub` toolset, minus interactive tools,
-  plus a nested `delegate` tool per its `delegate` policy. `batch`,
-  `code_execution`, and `task` are always excluded, because their permission
-  cost exceeds the plugin's grants.
+  plus a nested `delegate` tool per its `delegate` policy. Over-cost
+  containers (`batch`, `code_execution`, `task`) and capability-less
+  built-ins (`skill`, `todo_write`, `memory`, `view_image`, `task_stop`,
+  `task_message`) are always excluded: either would price the session at
+  permissions the plugin's narrow grants do not include. If a session is
+  still refused on a tool, the builder retries without it and logs what was
+  dropped. `skills = { ... }` still works: bodies are injected at dispatch
+  time.
 
 ## Failure modes
 

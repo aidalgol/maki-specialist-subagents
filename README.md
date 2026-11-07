@@ -139,9 +139,21 @@ security mechanism. You can remove any tools via the specialist table field
 
 When `type = "implementation"`, the specialist has the full `general_sub`
 toolset, minus interactive tools, plus a nested review-delegation local tool
-when `delegate.reviews` is set (`kind = "task"` is main-only). `batch`,
-`code_execution`, and `task` are always excluded (their permission cost
-exceeds this plugin's grants).
+when `delegate.reviews` is set (`kind = "task"` is main-only). Two classes of
+tool are always excluded, because maki prices either at permissions this
+plugin does not hold:
+
+- Over-cost containers: `batch`, `code_execution`, and `task`.
+- Capability-less built-ins: `skill`, `todo_write`, `memory`, `view_image`,
+  `task_stop`, and `task_message` declare no capability, which prices the
+  session at every permission except `agent` — more than the plugin's grants.
+
+A capability-less tool never stops a session from running: when maki refuses
+to open a session because of a refused tool, the builder retries without it
+and logs a single warning naming everything that was dropped. Note that
+`skills = { ... }` in a specialist definition still works even though `skill`
+is excluded, because skill bodies are injected into the system prompt at
+dispatch time, not loaded by the sub session's own `skill` tool.
 
 ## Background dispatches and in-flight actions
 
