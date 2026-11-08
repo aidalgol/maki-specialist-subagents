@@ -6,11 +6,10 @@ SPDX-License-Identifier: MIT
 
 # Maki `specialist-subagents`
 
-Maki plugin for defining custom specialist subagents with delegation-workflow
-support that goes beyond "just spawn a subagent": a two-type specialist system,
-harness-enforced nested delegation, a content-addressed review ledger that
-deduplicates reviews, and budgets that make delegation trees safe instead of
-forbidden.
+Maki plugin for defining custom specialist subagents with delegation workflows
+built into the harness: a two-type specialist system, nested delegation, a
+content-addressed review ledger that deduplicates reviews, and budgets that
+make deep delegation trees safe.
 
 ## What it gives you
 
@@ -119,7 +118,7 @@ a requested skill or instruction file that cannot be found. These surface only
 in the log, so a specialist may run without its intended instructions if you do
 not check.
 
-Note that because the global specialists definitions are always read, a broken
+Because the global specialists definitions are always read, a broken
 global specialist disables the plugin in every project.
 
 ### Tool defaults
@@ -130,10 +129,9 @@ field in the specialist definition.
 #### Review
 
 When `type = "review"`, the specialist has read tools plus `bash` and the web
-tools. This is by design, because it is impossible to know ahead of time what
-a specialist will need to properly do its job. Maki's permission system is the
-security mechanism. You can remove any tools via the specialist table field
-`tools.except`.
+tools. Review tools are broad because a definition cannot know ahead of time
+what the job needs; Maki's permission system is the security mechanism. You can
+remove any tools via the specialist table field `tools.except`.
 
 #### Implementation
 
@@ -268,13 +266,13 @@ Caveats:
 
 `plugin.toml` grants exactly `agent`, `fs_read`, `fs_write`, `run`, `net`,
 `session_read`, `session_write` — no `env`. `net` exists only so specialists
-can be handed the native `webfetch`/`websearch` tools and the permission
-relay can see their prompts; the plugin itself makes no network calls and
-records no permission rules. The plugin never widens anyone's authority:
-no pre-approvals, no private execution channels,
-zero `register_permission_rule`, zero `set_prompt`. The one seam it wraps is
-maki's `permission.prompt` slot, described below: it answers prompts in the
-user's name, it never bypasses a deny.
+can be handed the native `webfetch`/`websearch` tools and the permission relay
+can see their prompts; the plugin itself makes no network calls and records no
+permission rules. The plugin never widens anyone's authority: no pre-approvals,
+no private execution channels, and no calls to `register_permission_rule`
+or `set_prompt`. The one seam it wraps is maki's `permission.prompt` slot,
+described below: it answers prompts in the user's name, it never bypasses
+a deny.
 
 Sub sessions cannot answer permission prompts, so by default a call that
 would prompt is denied. Two mechanisms fill that gap:
@@ -300,8 +298,7 @@ answers live only for the session, and `.maki/permissions.toml` remains the
 way to pre-allow recurring commands. Attribution is re-verified against the
 live task list on every relay, so a closed session's cache dies with it.
 Calls from the main session and from other plugins' subagents pass the layer
-untouched, and deny rules and escalated (`ask`) calls never reach it —
-nothing here bypasses a deny.
+untouched, and deny rules and escalated (`ask`) calls never reach it.
 
 The plugin holds `net`, so `webfetch`/`websearch` calls relay like any other
 prompted call: with no project rule, the relay window appears; whether web
@@ -347,7 +344,7 @@ semantically.
 
 Code that does not need to call into the Maki API is unit-tested with
 [LuaUnit](https://github.com/bluebird75/luaunit), vendored as the submodule
-`external/luaunit`. The standalone **Lua** interpreter is used because Luau's
+`external/luaunit`. The standalone Lua interpreter is used because Luau's
 require-by-string refuses this repository's layout (the entry file
 `lua/specialist_subagents.lua` beside the package directory
 `lua/specialist_subagents/` is an ambiguous component), while Lua's
