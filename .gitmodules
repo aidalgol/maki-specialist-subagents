@@ -8,3 +8,6 @@
 [submodule "external/luaunit"]
 	path = external/luaunit
 	url = https://github.com/bluebird75/luaunit.git
+[submodule "external/humanizer"]
+	path = external/humanizer
+	url = https://github.com/blader/humanizer.git
