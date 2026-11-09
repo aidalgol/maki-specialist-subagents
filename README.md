@@ -21,6 +21,46 @@ make deep delegation trees safe.
 | bundled skill | main | `specialist-subagents` skill teaching the agent how to author specialist definitions; see [Bundled skill](#bundled-skill). |
 | prompt hint (`tool_usage`) | main | Fresh catalog plus delegation guidance, rebuilt every run. |
 
+A dispatch flows from your session through the specialist sessions and
+returns as one aggregated report:
+
+```mermaid
+flowchart TD
+    you["You (chat UI)"]
+    main["Main agent session"]
+    dl["delegate dispatch"]
+    impl["Implementation specialist sub session"]
+    rev["Review specialist sub sessions (parallel)"]
+    led[("Review ledger")]
+    rep["Aggregated report: verdicts, costs, coverage table"]
+    rcpt["Receipt with the dispatch id"]
+    relay["Permission relay window"]
+
+    you --> main
+
+    main -- "task or review" --> dl
+    dl -- "targets fan-out" --> rev
+    dl -- "scalar dispatch" --> impl
+    dl -- "background = true" --> rcpt
+    rcpt -. "aggregated report arrives later as a message" .-> main
+
+    dl -- "look up changed files" --> led
+    led -- "fresh: run the review<br/>cached: return recorded verdict<br/>identical in-flight: join the session" --> dl
+
+    main -. "specialist_reviews: check prior coverage" .-> led
+
+    impl -- "nested review: fix and re-review" --> rev
+    rev -- "record verdicts" --> led
+
+    rev -- "review verdicts" --> rep
+    impl -- "task results" --> rep
+    rep --> main
+
+    impl -- "permission prompt" --> relay
+    rev -- "permission prompt" --> relay
+    relay --> you
+```
+
 ## Specialist definitions
 
 A specialist is defined by a Lua module and a markdown instruction file, located under either the project-local `.maki/` directory, or the user's global Maki config directory.
