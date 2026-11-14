@@ -13,13 +13,13 @@ make deep delegation trees safe.
 
 ## What it gives you
 
-| Tool / command | Audience | Purpose |
-|---|---|---|
-| `delegate` | main only | Dispatch specialists: one scalar dispatch, or a `targets` list that fans out in parallel and returns one aggregated report. `background = true` runs the dispatch in the background; `action` queries or reaches in-flight dispatches. |
-| `specialist_reviews` | main + subs | Read-only ledger query: which changed files already have review coverage. |
-| `/specialists` | user | Catalog, live invocations, recent coverage. |
-| bundled skill | main | `specialist-subagents` skill teaching the agent how to author specialist definitions; see [Bundled skill](#bundled-skill). |
-| prompt hint (`tool_usage`) | main | Fresh catalog plus delegation guidance, rebuilt every run. |
+| Tool / command             | Audience    | Purpose                                                                                                                                                                                                                                |
+| -------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `delegate`                 | main only   | Dispatch specialists: one scalar dispatch, or a `targets` list that fans out in parallel and returns one aggregated report. `background = true` runs the dispatch in the background; `action` queries or reaches in-flight dispatches. |
+| `specialist_reviews`       | main + subs | Read-only ledger query: which changed files already have review coverage.                                                                                                                                                              |
+| `/specialists`             | user        | Catalog, live invocations, recent coverage.                                                                                                                                                                                            |
+| bundled skill              | main        | `specialist-subagents` skill teaching the agent how to author specialist definitions; see [Bundled skill](#bundled-skill).                                                                                                             |
+| prompt hint (`tool_usage`) | main        | Fresh catalog plus delegation guidance, rebuilt every run.                                                                                                                                                                             |
 
 A dispatch flows from your session through the specialist sessions and
 returns as one aggregated report:
@@ -128,6 +128,7 @@ return {
 ```
 
 One additional field that is valid only when `type = "implementation"`.
+
 ```lua
 return {
   -- ...
@@ -216,11 +217,11 @@ error says to dispatch synchronously.
 While a dispatch runs, `action` operates on its specialists instead of
 dispatching new work:
 
-| `action` | Effect |
-|---|---|
-| `status` | List the in-flight dispatches from this session: ids, elapsed time, and per-specialist state. Read-only, allowed from any invoker. |
+| `action`  | Effect                                                                                                                                                          |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`  | List the in-flight dispatches from this session: ids, elapsed time, and per-specialist state. Read-only, allowed from any invoker.                              |
 | `message` | Queue `text` to each matched specialist's live session via `Session:send`; it lands at the sub's next turn boundary as an interrupt from its parent. Main-only. |
-| `stop` | Close each matched live session, so its blocked prompt returns as cancelled and the normal failure path releases claims and in-flight ledger keys. Main-only. |
+| `stop`    | Close each matched live session, so its blocked prompt returns as cancelled and the normal failure path releases claims and in-flight ledger keys. Main-only.   |
 
 The `dispatch` option targets one dispatch by id (from a receipt). Without
 it, the action applies to every in-flight dispatch opened from this session;
