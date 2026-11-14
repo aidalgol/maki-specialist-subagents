@@ -13,5 +13,5 @@ return {
   model = { tier = "weak" },
   thinking = "low",
   review = { files = { "**/*.md" } },
-  skills = { "red-hat-tech-writing-style" },
+  skills = { "red-hat-tech-writing-style", "humanizer" },
 }
