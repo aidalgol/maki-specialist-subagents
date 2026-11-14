@@ -21,7 +21,8 @@ one line rather than rewriting wholesale.
 - **Sentence hygiene.** Present tense, active voice, second person for
   instructions, one idea per sentence, short sentences.
 - **Structure.** Headings follow the style guide's capitalisation; lists are
-  parallel; code examples are complete enough to run.
+  parallel; code examples either run as written or are clearly
+  fill-in-the-blank templates the reader is meant to adapt.
 - **Honesty.** No marketing adjectives, no claims the repository does not
   back up. "Not goals" and limitations stay documented.
 

@@ -267,36 +267,45 @@ This repository itself also uses the plugin: four specialists under `.maki/`.
 
 ## Bundled skill
 
-The pack ships a `specialist-subagents` skill that teaches an agent how to
-author specialist definitions: the file layout, the complete definition
+This plugin pack includes a `specialist-subagents` skill that teaches an agent
+how to author specialist definitions: the file layout, the complete definition
 schema, per-type tool defaults, the failure modes, how to write instruction
 files, and a primer on how `delegate` invokes specialists.
 
-Maki has no mechanism for a plugin to install a skill, so installation is a
-manual copy or symlink, done outside Maki, from the installed pack or a
-source checkout into your global skills directory:
+Maki has no mechanism for a plugin to provide a skill, so you must install it
+manually.
+
+Either copy the skill from the installed pack, or check out the source
+repository and symlink the skill from your checkout.
 
 ```sh
-# Copy from an installed pack (the rev directory changes on update;
-# the glob skips the dot-prefixed .work dir):
-mkdir -p ~/.config/maki/skills && cp -r \
-  ~/.local/share/maki/site/pack/core/maki-specialist-subagents/*/skills/specialist-subagents \
+# Copy from an installed pack (the rev directory changes on update):
+mkdir -p ~/.config/maki/skills
+# Replace abcd... with the revision hash of the installed pack.
+cp -r \
+  ~/.local/share/maki/site/pack/core/maki-specialist-subagents/abcd.../skills/specialist-subagents \
   ~/.config/maki/skills/
+```
 
-# Or symlink from a source checkout (survives pack updates and git pulls):
-ln -s ~/src/maki-plugins/specialist-subagents/skills/specialist-subagents \
+```sh
+mkdir -p ~/.config/maki/skills
+ln -s ~/src/path/to/maki-specialist-subagents/skills/specialist-subagents \
   ~/.config/maki/skills/specialist-subagents
 ```
 
-Caveats:
+Whichever method you choose, keep the skill in sync with the installed
+version of the plugin; a stale skill misleads the orchestrator during
+specialist work. Keep these points in mind:
 
 - A copy is frozen at the revision you copied. Re-run the `cp` after a pack
   update.
 - A symlink into the pack revision directory goes stale when the pack
   updates. Prefer the source-checkout symlink.
 - A project-local `.maki/skills/specialist-subagents/` directory overrides
-  the global copy. The directory does not exist in a fresh project; create it
-  if you want a project-specific variant of the skill.
+  the global copy. A project-local install is not recommended unless the
+  project vendors a matching version of the plugin itself. The directory
+  does not exist in a fresh project; create it if you want a project-specific
+  variant of the skill.
 - The `skill` tool discovers the file on the next Maki start or `/reload`.
 
 ## Permissions guidance
