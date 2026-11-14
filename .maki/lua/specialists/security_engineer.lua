@@ -9,8 +9,7 @@ return {
   type = "review",
   description = "Reviews the plugin's privileged surface: trust boundaries, privilege grants, argv/path/state injection, budgets.",
   instructions = "security-engineer.md",
-  model = { tier = "strong" },
-  thinking = "medium",
+  model = { spec = "synthetic/hf:zai-org/GLM-5.3" },
   review = {
     files = {
       "lua/**/*.lua",

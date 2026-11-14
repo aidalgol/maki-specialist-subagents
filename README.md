@@ -265,10 +265,6 @@ This repository itself also uses the plugin: four specialists under `.maki/`.
 - `security-engineer`
 - `test-engineer`
 
-Because this project's `.maki/` loads the plugin itself, it will clash with a
-global install of the plugin. Temporarily disable loading in your global config
-before launching Maki in this project.
-
 ## Bundled skill
 
 The pack ships a `specialist-subagents` skill that teaches an agent how to
@@ -381,7 +377,20 @@ The ledger persists under `~/.local/state/maki/specialists/<hash(project
 cwd)>/ledger.json`; fingerprints self-invalidate stale entries
 semantically.
 
-## Testing
+## Development
+
+Because this project's `.maki/` loads the plugin itself, it will clash with a
+global install of the plugin. Temporarily disable loading in your global config
+before launching Maki in this project.
+
+The specialists in this project use pinned model IDs for the inference provider
+Synthetic. If you are using a different provider, you will need to change the
+`model` table before launching Maki in this project.
+
+Support in this plugin for collaborators using different providers with
+different available model IDs is planned.
+
+### Testing
 
 Code that does not need to call into the Maki API is unit-tested with
 [LuaUnit](https://github.com/bluebird75/luaunit), vendored as the submodule

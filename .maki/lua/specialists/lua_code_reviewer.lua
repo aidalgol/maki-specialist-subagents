@@ -10,8 +10,7 @@ return {
   type = "review",
   description = "Reviews Lua for maki API misuse, error propagation, permission declarations, and conventions.",
   instructions = "lua-code-reviewer.md",
-  model = { tier = "medium" },
-  thinking = "low",
+  model = { spec = "synthetic/hf:zai-org/GLM-5.3" },
   review = { files = { "lua/**/*.lua", "spec/**/*.lua" } },
   skills = { "maki-plugin-dev" },
 }
