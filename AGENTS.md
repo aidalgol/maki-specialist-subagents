@@ -14,6 +14,8 @@ dispatched against changes made here.
 
 ## Before finishing
 
+Run `prettier --check README.md AGENTS.md`.
+
 Dispatch the relevant area specialists in one `delegate` `targets` call (your
 judgment; see `specialist_reviews` for prior coverage). Completion requires
 the report's coverage table to show every changed file passing, with no
