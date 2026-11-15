@@ -29,15 +29,15 @@
 -- go through the relay like any other prompted call; whether web tools are
 -- allowed in a project is decided by its Maki permission rules and prompts.
 
-local function req(dotted, sibling)
-  local ok, mod = pcall(require, dotted)
-  if ok and mod then
-    return mod
-  end
-  return require("specialist_subagents." .. sibling)
+-- Tolerant require: dotted in maki, file-relative under the luau CLI.
+-- compat.require is the shared core; it cannot load itself, so load it with
+-- the same tolerant pattern inline and route the rest through it.
+local ok_compat, Compat = pcall(require, "specialist_subagents.compat")
+if not ok_compat or type(Compat) ~= "table" then
+  Compat = require("./compat")
 end
 
-local Config = req("specialist_subagents.config", "./config")
+local Config = Compat.require("specialist_subagents.config", "./config")
 
 local M = {}
 

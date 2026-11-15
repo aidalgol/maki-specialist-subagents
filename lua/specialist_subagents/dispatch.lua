@@ -10,21 +10,20 @@
 -- go through the ledger's atomic choke point.
 
 -- Tolerant require: dotted in maki, file-relative under the luau CLI.
-local function req(dotted, sibling)
-  local ok, mod = pcall(require, dotted)
-  if ok and mod then
-    return mod
-  end
-  return require(sibling)
+-- compat.require is the shared core; it cannot load itself, so load it with
+-- the same tolerant pattern inline and route the rest through it.
+local ok_compat, Compat = pcall(require, "specialist_subagents.compat")
+if not ok_compat or type(Compat) ~= "table" then
+  Compat = require("./compat")
 end
 
-local Config = req("specialist_subagents.config", "./config")
-local Git = req("specialist_subagents.git", "./git")
-local Ledger = req("specialist_subagents.ledger", "./ledger")
-local Report = req("specialist_subagents.report", "./report")
-local Registry = req("specialist_subagents.registry", "./registry")
-local SB = req("specialist_subagents.session_builder", "./session_builder")
-local Permissions = req("specialist_subagents.permissions", "./permissions")
+local Config = Compat.require("specialist_subagents.config", "./config")
+local Git = Compat.require("specialist_subagents.git", "./git")
+local Ledger = Compat.require("specialist_subagents.ledger", "./ledger")
+local Report = Compat.require("specialist_subagents.report", "./report")
+local Registry = Compat.require("specialist_subagents.registry", "./registry")
+local SB = Compat.require("specialist_subagents.session_builder", "./session_builder")
+local Permissions = Compat.require("specialist_subagents.permissions", "./permissions")
 
 local M = {}
 
@@ -733,12 +732,24 @@ local function Spec_cap(spec)
   return spec.max_iterations or Config.iteration_cap
 end
 
-local function drop_claim(owner)
+-- Identity-scoped removal: drop only the row whose identity equals `row`,
+-- so two fan-out targets sharing one specialist name cannot drop each
+-- other's still-active claims. No-op on nil.
+local function drop_claim(row)
+  if not row then
+    return
+  end
   for i = #State.claims, 1, -1 do
-    if State.claims[i].owner == owner then
+    if rawequal(State.claims[i], row) then
       table.remove(State.claims, i)
     end
   end
+end
+
+local function register_claim(target)
+  local row = { claims = target.claims, owner = target.specialist }
+  State.claims[#State.claims + 1] = row
+  return row
 end
 
 -- Review-type targets a nested delegate tool may call, offered only when
@@ -907,7 +918,8 @@ local function run_target(ctx, target, invoker, call)
       end
       result.warnings[#result.warnings + 1] = c
     end
-    State.claims[#State.claims + 1] = { claims = target.claims, owner = target.specialist }
+    local row = register_claim(target)
+    result._claim_row = row
     result._claim_registered = true
   end
 
@@ -954,7 +966,7 @@ local function run_target(ctx, target, invoker, call)
       Ledger.in_flight_pop(state, result._join_key)
     end
     if result._claim_registered then
-      drop_claim(target.specialist)
+      drop_claim(result._claim_row)
     end
     return result
   end
@@ -1004,11 +1016,14 @@ local function run_target(ctx, target, invoker, call)
   end
 
   if result._claim_registered then
-    drop_claim(target.specialist)
+    drop_claim(result._claim_row)
+    result._claim_row = nil
     result._claim_registered = nil
   end
 
-  if not res then
+  -- A cut-short prompt can return partial text AND an error (Esc / stop);
+  -- abort rather than record the partial as a completed review.
+  if not res or prompt_err then
     result.status = (prompt_err == "cancelled" or prompt_err == "stopped by user") and "cancelled" or "failed"
     result.error = "prompt failed: " .. tostring(prompt_err)
     if result._join_key then
@@ -1140,15 +1155,19 @@ local function aggregate_text(cwd, targets, results)
         files_scope = t.scope
       end
     end
-    local snap
+    local snap, snap_err
     if plan_scope then
-      snap = plan_snapshot(cwd)
+      snap, snap_err = plan_snapshot(cwd)
     elseif files_scope then
-      snap = files_snapshot(cwd, files_scope)
+      snap, snap_err = files_snapshot(cwd, files_scope)
     else
       snap = changed_snapshot(cwd, { files = {}, basis = "changed" })
     end
-    if snap then
+    if not snap then
+      -- Surface the snapshot failure reason instead of silently skipping
+      -- the coverage audit.
+      text = text .. "\n\nerror: " .. tostring(snap_err)
+    else
       local rows, uncovered = coverage_audit(cwd, snap, ordered)
       local cov = Report.format_coverage(rows, uncovered)
       if cov and #cov > 0 then
@@ -1439,9 +1458,9 @@ function M.reviews_lookup(ctx, input)
   local basis = input.basis or "changed"
   local paths = {}
   if basis == "plan" then
-    local snap = plan_snapshot(cwd)
+    local snap, perr = plan_snapshot(cwd)
     if not snap then
-      return "error: " .. tostring(snap), true
+      return "error: " .. tostring(perr), true
     end
     for _, f in ipairs(snap.files) do
       paths[#paths + 1] = f.path
@@ -1495,9 +1514,12 @@ function M.reviews_lookup(ctx, input)
         return (a.ts or 0) > (b.ts or 0)
       end)
       for _, e in ipairs(hits) do
-        local age = e.ts and (os.time() - e.ts) or "?"
-        out[#out + 1] = string.format(" %-46s %-24s %-16s (%ds ago)",
-          path, e.specialist, e.verdict or "unparsed", age)
+        -- Entries without ts are legitimate (Ledger.record stores caller
+        -- input verbatim); branch rather than feed a string to %d.
+        local age_str = e.ts and string.format("%ds ago", os.time() - e.ts)
+          or "age unknown"
+        out[#out + 1] = string.format(" %-46s %-24s %-16s (%s)",
+          path, e.specialist, e.verdict or "unparsed", age_str)
       end
     else
       out[#out + 1] = string.format(" %-46s %-24s %s", path, "-", "UNREVIEWED")
@@ -1514,5 +1536,7 @@ M._record_ledger = record_ledger -- exposed for tests (persist-failure warning)
 M._combined_verdict = combined_verdict -- exposed for tests (full-cache findings replay)
 M._apply_partial_cache = apply_partial_cache -- exposed for tests (partial-hit findings suppression)
 M._coverage_audit = coverage_audit -- exposed for tests (multi-specialist coverage)
+M._register_claims = register_claim -- exposed for tests (identity-scoped claims)
+M._drop_claims = drop_claim -- exposed for tests (identity-scoped claims)
 
 return M

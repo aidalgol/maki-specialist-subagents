@@ -56,10 +56,10 @@ function TestSessionBuilder:test_local_delegate_keyed_input_translates_to_scalar
     { { name = "scss-reviewer", description = "d" } },
     function(input, invoker)
       captured = { input = input, invoker = invoker }
-      return { llm_output = "dispatched" }
+      return "dispatched"
     end)
   local res = tool.delegate.handler({ ["scss-reviewer"] = { brief = "review my work" } })
-  lu.assertEquals(res.llm_output, "dispatched")
+  lu.assertEquals(res, "dispatched")
   lu.assertEquals(captured.input.specialist, "scss-reviewer")
   lu.assertEquals(captured.input.brief, "review my work")
   lu.assertEquals(captured.input.targets, nil)
@@ -74,15 +74,47 @@ function TestSessionBuilder:test_local_delegate_keyed_input_for_unallowed_target
     { { name = "scss-reviewer", description = "d" } },
     function(input)
       captured = input
-      return { llm_output = "error: refused", is_error = true }
+      return "error: refused", true
     end)
   local keyed = { ["rogue-specialist"] = { brief = "sneak past the schema" } }
-  local res = tool.delegate.handler(keyed)
-  lu.assertEquals(res.is_error, true)
+  local res, err = tool.delegate.handler(keyed)
+  lu.assertEquals(res, nil)
+  lu.assertEquals(err, "error: refused")
   lu.assertEquals(captured, keyed, "input reaches run_dispatch unchanged")
   lu.assertEquals(captured.specialist, nil,
     "a key outside allowed_targets is never translated into a specialist dispatch")
   lu.assertEquals(captured.targets, nil)
+end
+
+-- Regression (maki >= 0.7.0 local-tool contract): the nested delegate
+-- handler must return (text) on success and (nil, err_text) on refusal.
+-- It previously forwarded run_dispatch's (error_text, true) pair -- for a
+-- local-tool handler that reads as a success carrying the refusal text
+-- as the tool's report.
+function TestSessionBuilder:test_local_delegate_error_path_returns_nil_plus_error_string()
+  local tool = SB.build_local_delegate(
+    nil,
+    { name = "test-engineer", chain = {} },
+    { { name = "scss-reviewer", description = "d" } },
+    function()
+      return "error: policy refused this dispatch", true
+    end)
+  local res, err = tool.delegate.handler({ specialist = "scss-reviewer", brief = "b" })
+  lu.assertEquals(res, nil, "refusal returns nil first")
+  lu.assertEquals(err, "error: policy refused this dispatch")
+end
+
+function TestSessionBuilder:test_local_delegate_success_path_returns_text_and_nil()
+  local tool = SB.build_local_delegate(
+    nil,
+    { name = "test-engineer", chain = {} },
+    { { name = "scss-reviewer", description = "d" } },
+    function()
+      return "report text"
+    end)
+  local res, err = tool.delegate.handler({ specialist = "scss-reviewer", brief = "b" })
+  lu.assertEquals(res, "report text")
+  lu.assertEquals(err, nil)
 end
 
 -- The capability-less-tool fix: select_tool_defs, parse_capability_less, and

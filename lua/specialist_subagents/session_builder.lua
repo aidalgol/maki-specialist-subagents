@@ -434,7 +434,13 @@ function M.build_local_delegate(ctx, invoker, allowed_targets, run_dispatch)
             end
           end
         end
-        return run_dispatch(input, invoker)
+        -- Local-tool contract (maki >= 0.7.0): return (text) on success,
+        -- (nil, err_text) on refusal -- never a forwarded boolean.
+        local out, is_err = run_dispatch(input, invoker)
+        if is_err then
+          return nil, out
+        end
+        return out
       end,
     },
   }

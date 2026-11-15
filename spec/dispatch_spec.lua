@@ -453,6 +453,132 @@ function TestDispatch:test_reviews_lookup_reports_all_specialists_per_path()
   lu.assertStrContains(text, "0 of 1 file(s) have ledger coverage")
 end
 
+-- Regression: the active-claims registry drops rows by identity, not by
+-- owner name. Two fan-out targets sharing one specialist name used to be
+-- able to drop each other's still-active claims when one of them hit an
+-- open failure: the name-matching drop removed the sibling's row too.
+function TestDispatch:test_claim_registration_is_per_dispatch()
+  Dispatch._state.claims = {}
+  local row_a = Dispatch._register_claims({ claims = { "src/**" }, specialist = "test-engineer" })
+  local row_b = Dispatch._register_claims({ claims = { "spec/**" }, specialist = "test-engineer" })
+  lu.assertEquals(row_a.owner, "test-engineer")
+  lu.assertEquals(row_a.claims, { "src/**" })
+  lu.assertEquals(#Dispatch._state.claims, 2)
+
+  -- dropping row A leaves row B intact, by identity
+  Dispatch._drop_claims(row_a)
+  lu.assertEquals(#Dispatch._state.claims, 1)
+  lu.assertTrue(rawequal(Dispatch._state.claims[1], row_b), "the sibling row survives the drop")
+  lu.assertEquals(Dispatch._state.claims[1].owner, "test-engineer")
+
+  -- the open-failure path and the completion path can both fire for the
+  -- same dispatch; the second drop is a no-op and cannot touch row B
+  Dispatch._drop_claims(row_a)
+  lu.assertEquals(#Dispatch._state.claims, 1)
+  Dispatch._drop_claims(nil)
+  lu.assertEquals(#Dispatch._state.claims, 1, "dropping nil is a no-op")
+
+  Dispatch._drop_claims(row_b)
+  lu.assertEquals(#Dispatch._state.claims, 0)
+  Dispatch._state.claims = {}
+end
+
+-- Regression: plan-basis reviews_lookup used to stringify the failed
+-- snapshot value itself ("error: nil"), hiding why basis = "plan" refused.
+-- The snapshot's failure reason must surface, and a raising plan.read is
+-- caught and surfaces the same reason.
+function TestDispatch:test_reviews_lookup_plan_basis_surfaces_snapshot_reason()
+  local Ledger = require("specialist_subagents.ledger")
+
+  -- (a) plan.read reports no ready plan
+  Dispatch._state.ledgers["/tmp/fake-proj"] = Ledger.new_state()
+  _G.maki = {
+    uv = { cwd = function() return "/tmp/fake-proj" end },
+    plan = { read = function() return { ready = false } end },
+  }
+  local text, is_err = Dispatch.reviews_lookup(nil, { basis = "plan" })
+  _G.maki = nil
+  Dispatch._state.ledgers["/tmp/fake-proj"] = nil
+  lu.assertTrue(is_err)
+  lu.assertStrContains(text, "no ready plan")
+  lu.assertNotEquals(text, "error: nil",
+    "the snapshot's reason surfaces, not the nil snapshot value")
+
+  -- (b) plan.read raising surfaces the same reason (pcall path)
+  Dispatch._state.ledgers["/tmp/fake-proj"] = Ledger.new_state()
+  _G.maki = {
+    uv = { cwd = function() return "/tmp/fake-proj" end },
+    plan = { read = function() error("no plan host") end },
+  }
+  text, is_err = Dispatch.reviews_lookup(nil, { basis = "plan" })
+  _G.maki = nil
+  Dispatch._state.ledgers["/tmp/fake-proj"] = nil
+  lu.assertTrue(is_err)
+  lu.assertStrContains(text, "no ready plan")
+  lu.assertNotEquals(text, "error: nil")
+
+  -- (c) happy path: a ready plan is covered by its ledger row
+  local state = Ledger.new_state()
+  Ledger.record(state, {
+    specialist = "tech-writer", path = "plan.md",
+    fingerprint = "fp-plan", verdict = "approve",
+  })
+  Dispatch._state.ledgers["/tmp/fake-proj"] = state
+  _G.maki = {
+    uv = { cwd = function() return "/tmp/fake-proj" end },
+    plan = { read = function()
+      return { ready = true, content = "planned work", path = "plan.md" }
+    end },
+  }
+  text, is_err = Dispatch.reviews_lookup(nil, { basis = "plan" })
+  _G.maki = nil
+  Dispatch._state.ledgers["/tmp/fake-proj"] = nil
+  lu.assertEquals(is_err, nil)
+  lu.assertStrContains(text, "plan.md")
+  lu.assertStrContains(text, "tech-writer")
+  lu.assertStrContains(text, "1 of 1 file(s) have ledger coverage")
+end
+
+-- Regression: ledger entries without ts are legitimate (Ledger.record
+-- stores caller input verbatim); reviews_lookup fed the nil ts straight
+-- into a %d format and crashed the whole query. Nil-ts rows render with
+-- "age unknown" and ts-bearing companions still render an age.
+function TestDispatch:test_reviews_lookup_survives_entries_with_nil_timestamp()
+  local Ledger = require("specialist_subagents.ledger")
+  local state = Ledger.new_state()
+  Ledger.record(state, {
+    specialist = "x", path = "a.lua", fingerprint = "fp1", verdict = "approve",
+  }) -- deliberately no ts
+  Dispatch._state.ledgers["/tmp/fake-proj"] = state
+  _G.maki = {
+    uv = { cwd = function() return "/tmp/fake-proj" end },
+    fs = {
+      glob = function() return { "/tmp/fake-proj/a.lua" } end,
+      joinpath = function(a, b) return a .. "/" .. b end,
+      normalize = function(p) return p end,
+      read = function() return "content" end,
+    },
+  }
+  local ok, text = pcall(Dispatch.reviews_lookup, nil, { basis = "files", files = { "a.lua" } })
+  lu.assertTrue(ok, "reviews_lookup does not raise on a ts-less entry: " .. tostring(text))
+  lu.assertStrContains(text, "x")
+  lu.assertStrContains(text, "1 of 1 file(s) have ledger coverage")
+  lu.assertStrContains(text, "age unknown", "the ts-less row renders instead of crashing")
+
+  -- a companion ts-bearing entry still renders an "Ns ago" age
+  Ledger.record(state, {
+    specialist = "y", path = "b.lua", fingerprint = "fp2",
+    verdict = "approve", ts = os.time() - 3600,
+  })
+  _G.maki.fs.glob = function() return { "/tmp/fake-proj/a.lua", "/tmp/fake-proj/b.lua" } end
+  ok, text = pcall(Dispatch.reviews_lookup, nil, { basis = "files", files = { "a.lua", "b.lua" } })
+  _G.maki = nil
+  Dispatch._state.ledgers["/tmp/fake-proj"] = nil
+  lu.assertTrue(ok, "reviews_lookup still runs: " .. tostring(text))
+  lu.assertTrue(text:find("%ds ago") ~= nil, "the ts-bearing row renders an age")
+  lu.assertStrContains(text, "2 of 2 file(s) have ledger coverage")
+end
+
 -- ---------------------------------------------------------------------------
 -- Background dispatch validation + running-dispatch registry
 -- (plan: refined-casual-grouse)
