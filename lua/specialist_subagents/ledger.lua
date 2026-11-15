@@ -160,16 +160,20 @@ function M.claims_overlap(a, b)
 end
 
 -- Find active sibling claims intersecting `claims`; `active` is a list of
--- { claims = {...}, owner = "..." }.
-function M.find_claim_conflicts(active, claims)
+-- { claims = {...}, owner = "..." }. `skip`, when given, is a predicate
+-- `skip(sibling) -> boolean`; rows it accepts are ignored (used to exempt
+-- same-dispatch self-overlap).
+function M.find_claim_conflicts(active, claims, skip)
   local conflicts = {}
   for _, sibling in ipairs(active or {}) do
-    for _, mine in ipairs(claims or {}) do
-      for _, theirs in ipairs(sibling.claims or {}) do
-        if M.claims_overlap(mine, theirs) then
-          conflicts[#conflicts + 1] = string.format(
-            "path claim %q overlaps %q already claimed by %s", mine, theirs,
-            sibling.owner or "another task")
+    if not (skip and skip(sibling)) then
+      for _, mine in ipairs(claims or {}) do
+        for _, theirs in ipairs(sibling.claims or {}) do
+          if M.claims_overlap(mine, theirs) then
+            conflicts[#conflicts + 1] = string.format(
+              "path claim %q overlaps %q already claimed by %s", mine, theirs,
+              sibling.owner or "another task")
+          end
         end
       end
     end

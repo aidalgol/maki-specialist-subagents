@@ -376,6 +376,8 @@ require("specialist_subagents").setup({
   review_max_depth = 2,    -- nested review depth cap
   iteration_cap = 3,       -- fix<->re-review rounds per (implementer, reviewer, scope)
   strict_claims = false,   -- reject overlapping path claims instead of warning
+                           -- (cross-dispatch and cross-specialist; overlap within
+                           -- the same dispatch to the same specialist is exempt)
   ledger_cap = 500,        -- persisted review ledger entries per project
   permission_relay = true, -- show specialist permission prompts in the parent UI
   allow_background = true, -- allow background delegate calls (receipt now, report as a message)
@@ -450,3 +452,7 @@ manual testing.
 10. In a non-YOLO session, trigger a specialist permission relay window;
     confirm the status bar shows the y/s/n hints, and that they clear on
     both an answer and the 55 s timeout.
+11. With `strict_claims = true`, dispatch two same-specialist task targets
+    with overlapping claims in one fan-out — expect neither a warning nor a
+    refusal — and confirm a foreground task still refuses against a
+    still-running background dispatch with overlapping claims.

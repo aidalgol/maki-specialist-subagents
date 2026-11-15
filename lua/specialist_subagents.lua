@@ -81,7 +81,7 @@ local DELEGATE_SCHEMA = {
     claims = {
       type = "array",
       items = { type = "string" },
-      description = "Task dispatches only: path globs this work will touch. Overlap with active sibling claims warns (or refuses under strict_claims).",
+      description = "Task dispatches only: path globs this work will touch. Overlap with active sibling claims warns (or refuses under strict_claims); overlap within the same dispatch to the same specialist is exempt (you routed it deliberately).",
     },
     force_review = {
       type = "boolean",
@@ -234,7 +234,7 @@ maki.api.register_prompt_hint({
       "- Cached reviews are authoritative: an unchanged file returns its recorded verdict instantly. Use force_review only after the content changed.",
       "- Resolve a report's UNCOVERED lines (changed files no dispatched scope covered) before declaring a review pass; `specialist_reviews` shows prior coverage cheaply.",
       "- Fix<->re-review rounds are capped per specialist and scope; change the content or accept the findings instead of re-dispatching.",
-      "- Task dispatches to implementation specialists record path claims; overlapping claims warn (or refuse under strict_claims).",
+      "- Task dispatches to implementation specialists record path claims; overlapping claims warn (or refuse under strict_claims). Overlap within the same dispatch to the same specialist is exempt — the caller routed it deliberately.",
       "- Cross-discipline routing is yours: fan out to several specialists in one `targets` call instead of having one specialist dispatch another. Nested delegation is review-only (an implementer may have its own changes reviewed); a specialist that finds work outside its brief reports it back for you to route.",
       "- Long fan-outs can run in the background: background = true returns a receipt immediately and the aggregate report arrives as a message — do not re-dispatch (the ledger dedups and joins anyway). action = \"status\"/\"message\"/\"stop\" operates on in-flight dispatches.",
       "- To review explicit working-tree content (e.g. a clean tree), use scope.basis = \"files\" with explicit paths/globs instead of filtering changed files.",

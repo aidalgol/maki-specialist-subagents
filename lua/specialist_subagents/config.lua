@@ -26,7 +26,9 @@ local M = {
   -- a reviewer's own `max_iterations` overrides it.
   iteration_cap = 3,
   -- Reject task dispatches whose claims overlap an active sibling claim,
-  -- instead of warning.
+  -- instead of warning. Cross-dispatch conflicts only: same-dispatch
+  -- self-overlap (one fan-out dispatching the same specialist twice with
+  -- overlapping claims) is exempt.
   strict_claims = false,
   -- Max files one files-basis review may resolve (scope.basis = "files" is
   -- model-supplied explicit paths/globs; the cap keeps a runaway `**/*` from

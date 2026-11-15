@@ -209,7 +209,8 @@ function M.validate_background_target(cwd, target, invoker, peek)
   end
   local kind = target.kind or (spec.type == "review" and "review" or "task")
   if kind == "task" and #target.claims > 0 and Config.strict_claims then
-    local conflicts = Ledger.find_claim_conflicts(State.claims, target.claims)
+    local conflicts = Ledger.find_claim_conflicts(
+      State.claims, target.claims, M._self_overlap_skip(target))
     if #conflicts > 0 then
       return "strict_claims: " .. conflicts[1]
     end
@@ -747,9 +748,27 @@ local function drop_claim(row)
 end
 
 local function register_claim(target)
-  local row = { claims = target.claims, owner = target.specialist }
+  local row = {
+    claims = target.claims,
+    owner = target.specialist,
+    dispatch_id = target._dispatch and target._dispatch.id or nil,
+  }
   State.claims[#State.claims + 1] = row
   return row
+end
+
+-- Skip predicate for find_claim_conflicts: ignores sibling claim rows
+-- registered by the same dispatch id for the same specialist (one fan-out
+-- dispatching the same specialist twice with overlapping claims is a
+-- deliberate routing decision, not a conflict). The `target._dispatch ~= nil`
+-- guard keeps untagged/legacy rows (dispatch_id == nil) from matching a
+-- target without `_dispatch`.
+M._self_overlap_skip = function(target)
+  return function(row)
+    return target._dispatch ~= nil
+      and row.dispatch_id == target._dispatch.id
+      and row.owner == target.specialist
+  end
 end
 
 -- Review-type targets a nested delegate tool may call, offered only when
@@ -909,7 +928,8 @@ local function run_target(ctx, target, invoker, call)
 
   -- claims: task requests record glob claims and check active siblings
   if kind == "task" and #target.claims > 0 then
-    local conflicts = Ledger.find_claim_conflicts(State.claims, target.claims)
+    local conflicts = Ledger.find_claim_conflicts(
+      State.claims, target.claims, M._self_overlap_skip(target))
     for _, c in ipairs(conflicts) do
       if Config.strict_claims then
         result.status = "refused"

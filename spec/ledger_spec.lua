@@ -347,4 +347,49 @@ function TestLedger:test_find_claim_conflicts_names_the_owner()
   lu.assertEquals(#Ledger.find_claim_conflicts(active, { "lua/x.lua" }), 0)
 end
 
+-- Regression: the same-dispatch self-overlap exemption. The optional third
+-- parameter, a skip predicate, must drop exactly the rows it accepts -- here
+-- the same-dispatch impl row -- while rows of other owners and other
+-- dispatch ids still conflict. The untagged legacy row runs against the
+-- predicate too (nil dispatch_id) without raising; its claims do not
+-- overlap, so it yields no conflict either way.
+function TestLedger:test_find_claim_conflicts_skip_predicate_honors_row()
+  local active = {
+    { owner = "impl", dispatch_id = 7, claims = { "src/**" } },
+    { owner = "other", dispatch_id = 7, claims = { "src/**" } },
+    { owner = "impl", dispatch_id = 9, claims = { "src/**" } },
+    { owner = "impl", claims = { "docs/**" } }, -- untagged legacy row
+  }
+  local skip = function(row)
+    return row.owner == "impl" and row.dispatch_id == 7
+  end
+  local conflicts = Ledger.find_claim_conflicts(active, { "src/x.lua" }, skip)
+  lu.assertEquals(#conflicts, 2, "the skipped impl/7 row dropped, the rest survive")
+  local impl_named = 0
+  for _, c in ipairs(conflicts) do
+    if string.find(c, "already claimed by impl", 1, true) then
+      impl_named = impl_named + 1
+    end
+  end
+  lu.assertEquals(impl_named, 1,
+    "the same-owner rows were dropped by the predicate, not by dedup")
+end
+
+-- The skip parameter is optional: a nil skip must behave exactly like the
+-- two-argument call (backward compatibility for every pre-existing caller).
+function TestLedger:test_find_claim_conflicts_nil_skip_is_backward_compatible()
+  local active = {
+    { owner = "test-engineer", claims = { "spec/**" } },
+    { owner = "other", claims = { "README.md" } },
+  }
+  local claims = { "spec/new_test.lua", "lua/x.lua" }
+  local two_arg = Ledger.find_claim_conflicts(active, claims)
+  local nil_skip = Ledger.find_claim_conflicts(active, claims, nil)
+
+  lu.assertEquals(#nil_skip, #two_arg, "same length as the two-argument call")
+  for i, c in ipairs(two_arg) do
+    lu.assertEquals(nil_skip[i], c, "element " .. i .. " matches")
+  end
+end
+
 return TestLedger

@@ -483,6 +483,44 @@ function TestDispatch:test_claim_registration_is_per_dispatch()
   Dispatch._state.claims = {}
 end
 
+-- Regression: the same-dispatch self-overlap exemption. register_claim tags
+-- each row with id of the target's dispatch, which is what the
+-- _self_overlap_skip predicate scopes on; a target without _dispatch gets a
+-- nil (not false) dispatch_id.
+function TestDispatch:test_register_claim_tags_dispatch_id_from_target_dispatch()
+  Dispatch._state.claims = {}
+  local row_a = Dispatch._register_claims({
+    claims = { "src/**" }, specialist = "test-engineer",
+    _dispatch = { id = 7, idx = 1 },
+  })
+  lu.assertEquals(row_a.dispatch_id, 7, "the row carries target._dispatch.id")
+  local row_b = Dispatch._register_claims({
+    claims = { "spec/**" }, specialist = "test-engineer",
+  })
+  lu.assertNil(row_b.dispatch_id, "no _dispatch means nil, not false")
+  Dispatch._state.claims = {}
+end
+
+-- Regression: the _self_overlap_skip predicate scopes the exemption to rows
+-- of the same owner inside the same dispatch. The `target._dispatch ~= nil`
+-- guard keeps untagged legacy rows from matching a target without a
+-- dispatch: nil dispatch_id must never "equal" a nil dispatch id, and
+-- evaluating the predicate must not raise.
+function TestDispatch:test_self_overlap_skip_predicate_scopes_to_same_dispatch_and_owner()
+  local skip = Dispatch._self_overlap_skip({ specialist = "impl", _dispatch = { id = 7 } })
+  lu.assertEquals(skip({ owner = "impl", dispatch_id = 7 }), true)
+  lu.assertEquals(skip({ owner = "other", dispatch_id = 7 }), false, "same dispatch, other owner")
+  lu.assertEquals(skip({ owner = "impl", dispatch_id = 9 }), false, "same owner, other dispatch")
+  lu.assertEquals(skip({ owner = "impl" }), false, "untagged legacy row is never skipped")
+
+  -- a target without _dispatch gets an always-false predicate; indexing a
+  -- nil _dispatch used to be the nil==nil hazard here (would raise)
+  local no_dispatch = Dispatch._self_overlap_skip({ specialist = "impl" })
+  lu.assertEquals(no_dispatch({ owner = "impl", dispatch_id = 7 }), false)
+  lu.assertEquals(no_dispatch({ owner = "impl" }), false,
+    "nil dispatch_id never matches a nil dispatch id, without raising")
+end
+
 -- Regression: plan-basis reviews_lookup used to stringify the failed
 -- snapshot value itself ("error: nil"), hiding why basis = "plan" refused.
 -- The snapshot's failure reason must surface, and a raising plan.read is
