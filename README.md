@@ -210,23 +210,23 @@ dispatch time, not loaded by the sub session's own `skill` tool.
 
 ## Background dispatches and in-flight actions
 
-A review fan-out can run long. `background = true` on a `delegate` call
-(scalar or `targets` form) returns a receipt immediately: the dispatch id
-(`bg-<n>`, e.g. `bg-3`), the specialists involved, and any targets refused at
+A review fan-out can run long. `background = true` on a `delegate` call (scalar
+or `targets` form) returns a receipt immediately: the dispatch id (`bg-<n>`,
+for example, `bg-3`), the specialists involved, and any targets refused at
 validation. The fan-out then runs in a task that outlives the tool call, and
-when it completes the aggregated report — the same aggregate and review
-coverage audit a synchronous call returns — is delivered to the session as a
-message (via `maki.session.notify` with `wake = true`), so the model's next
-turn reads it without the user doing anything.
+when it completes the aggregated report — the same aggregate and review coverage
+audit a synchronous call returns — is delivered to the session as a message (via
+`maki.session.notify` with `wake = true`), so the model's next turn reads it
+without the user doing anything.
 
 Do not re-dispatch while a background dispatch runs: the review ledger
 deduplicates unchanged content and joins identical in-flight reviews anyway.
 
 Background dispatches are main-only: a nested delegate's call must stay
-synchronous so its result reaches the specialist's own report. They are
-disabled when `allow_background = false`. They are also refused without a
-task UI (e.g. under `maki -p`), where there is no session to wake — the
-error says to dispatch synchronously.
+synchronous so its result reaches the specialist's own report. They are disabled
+when `allow_background = false`. They are also refused without a task UI (for
+example, under `maki -p`), where there is no session to wake — the error says to
+dispatch synchronously.
 
 While a dispatch runs, `action` operates on its specialists instead of
 dispatching new work:
@@ -352,14 +352,14 @@ tool, command/input, and the scopes the prompt asks about. Keys:
 While the window is open the status bar shows the `y` / `s` / `n` keys
 (`maki.ui.set_status_hint`), cleared when the window closes or times out.
 
-The window waits 55 s; if nobody answers (or it cannot open, e.g. under
-`maki -p`), the call is denied with guidance instead of hanging the sub.
-Verdicts record no rules host-side, so relays never persist: allow-always
-answers live only for the session, and `.maki/permissions.toml` remains the
-way to pre-allow recurring commands. Attribution is re-verified against the
-live task list on every relay, so a closed session's cache dies with it.
-Calls from the main session and from other plugins' subagents pass the layer
-untouched, and deny rules and escalated (`ask`) calls never reach it.
+The window waits 55 s; if nobody answers (or the window cannot open, for example,
+under `maki -p`), the call is denied with guidance instead of hanging the
+sub. Verdicts record no rules host-side, so relays never persist: allow-always
+answers live only for the session, and `.maki/permissions.toml` remains the way
+to pre-allow recurring commands. Attribution is re-verified against the live
+task list on every relay, so a closed session's cache dies with it. Calls from
+the main session and from other plugins' subagents pass the layer untouched, and
+deny rules and escalated (`ask`) calls never reach it.
 
 The plugin holds `net`, so `webfetch`/`websearch` calls relay like any other
 prompted call: with no project rule, the relay window appears; whether web
@@ -369,12 +369,12 @@ Pre-allow rules cover the rest:
 - file writes by implementation specialists inside the project are
   pre-allowed by maki's builtin `<cwd>/**` rule;
 - add project rules (`.maki/permissions.toml`) for the lint and
-  static-analysis commands your review specialists run, e.g.
+  static-analysis commands your review specialists run, for example,
   `ruff *`, `npm run lint*`, `cargo check *` — cheaper than answering the
   relay window on every dispatch;
 - to block web tools in a project, add deny rules for `webfetch`/`websearch`
   (or simply never allow them); to silence the relay for frequent fetches,
-  pre-allow e.g. `webfetch *`.
+  pre-allow a rule such as `webfetch *`.
 
 The plugin's own process execution is a fixed git channel only
 (`status`, `diff`, `rev-parse`, `hash-object` via argv arrays); everything a
@@ -405,12 +405,12 @@ semantically.
 
 ## Development
 
-Because this project's `.maki/` loads the plugin itself, it will clash with a
-global install of the plugin. Temporarily disable loading in your global config
+Because this project's `.maki/` loads the plugin itself, a global install of
+the plugin clashes with it. Temporarily disable loading in your global config
 before launching Maki in this project.
 
 The specialists in this project use pinned model IDs for the inference provider
-Synthetic. If you are using a different provider, you will need to change the
+Synthetic. If you use a different provider, change the
 `model` table before launching Maki in this project.
 
 Support in this plugin for collaborators using different providers with
