@@ -9,7 +9,9 @@ SPDX-License-Identifier: MIT
 Maki plugin for defining custom specialist subagents with delegation workflows
 built into the harness: a two-type specialist system, nested delegation, a
 content-addressed review ledger that deduplicates reviews, and budgets that
-make deep delegation trees safe.
+make deep delegation trees safe. It is inspired by the generic agent
+definitions in other coding agents such as OpenCode, but avoids the pitfalls
+of generic subagent harnesses.
 
 ## What it gives you
 
@@ -20,6 +22,18 @@ make deep delegation trees safe.
 | `/specialists`             | user        | Catalog, live invocations, recent coverage.                                                                                                                                                                                            |
 | bundled skill              | main        | `specialist-subagents` skill teaching the agent how to author specialist definitions; see [Bundled skill](#bundled-skill).                                                                                                             |
 | prompt hint (`tool_usage`) | main        | Fresh catalog plus delegation guidance, rebuilt every run.                                                                                                                                                                             |
+
+There is no command that dispatches specialists. You ask the top-level Maki
+agent to hand off parts of the task to a specialist, for example:
+
+> Have the technical-writer specialist review the uncommitted changes.
+
+> Have the test-engineer specialist write a test plan for the uncommitted code
+> changes.
+
+> Write a plan to add a new section to the user preferences screen for theming
+> options. Consult the ux-designer specialist when drafting your plan. Have the
+> test-engineer specialist review your draft plan and propose a test plan.
 
 A dispatch flows from your session through the specialist sessions and
 returns as one aggregated report:
@@ -227,15 +241,16 @@ The `dispatch` option targets one dispatch by id (from a receipt). Without
 it, the action applies to every in-flight dispatch opened from this session;
 an explicit id from another session does not match.
 
-## The AGENTS.md gate recipe
+## The `AGENTS.md` gate recipe
 
-Put this in your project's AGENTS.md (or instructions) to make the gate
-harness-backed rather than convention-backed:
+If you want some of your specialists to act as a final review gate — a gate the
+harness verifies for you, not a convention you hope the model follows — put
+the following recipe in your project's `AGENTS.md` (or instructions):
 
 > Before finishing, dispatch the relevant area specialists in one `delegate`
 > `targets` call (your judgment; see `specialist_reviews` for prior
 > coverage). Completion requires the report's coverage table to show every
-> changed file passing, with no `UNCOVERED` entries — previously-reviewed
+> changed file passing, with no `UNCOVERED` entries. Previously reviewed
 > content returns instantly from the ledger.
 
 The gate rides both the dedup and the audit: the model chooses whom to
