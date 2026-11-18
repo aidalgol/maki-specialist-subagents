@@ -2,8 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- Review ledger: in-flight registry, persisted content-addressed cache,
--- join keys, and fix<->re-review iteration bookkeeping.
+-- Review ledger: in-flight registry, persisted review cache keyed by file
+-- content AND review-time scope context, join keys, and fix<->re-review
+-- iteration bookkeeping.
 --
 -- The pure core (everything above the maki section) is unit-tested without
 -- the host. Persistence goes through one choke point that validates the
@@ -37,13 +38,31 @@ function M.scope_key(files)
   return table.concat(sorted, "\0")
 end
 
+-- Context key for a review: a verdict is changeset-level (the reviewer sees
+-- the whole diff), so it is only valid against the exact combination of file
+-- contents the reviewer saw. Hash over the sorted (path \0 fingerprint)
+-- pairs of the full scope. A lookup hits only when the file's fingerprint
+-- AND this context match, so a sibling change invalidates sibling verdicts.
+function M.context_key(files)
+  local parts = {}
+  for _, f in ipairs(files or {}) do
+    parts[#parts + 1] = tostring(f.path or "") .. "\0" .. tostring(f.fingerprint or "")
+  end
+  table.sort(parts)
+  return fnv1a(table.concat(parts, "\0"))
+end
+
 -- Join key for an in-flight review: (specialist, file-set, fingerprint).
 function M.join_key(specialist, files, fingerprint)
   return table.concat({ specialist, M.scope_key(files), fingerprint or "" }, "\0")
 end
 
-function M.entry_key(specialist, path, fingerprint)
-  return table.concat({ specialist, path, fingerprint }, "\0")
+-- Entry key: (specialist, path, fingerprint, context). The context component
+-- (M.context_key over the reviewed scope) lets two review contexts coexist
+-- per (specialist, path). Legacy entries without a context key under "" and
+-- can therefore never hit a context-bearing lookup.
+function M.entry_key(specialist, path, fingerprint, context)
+  return table.concat({ specialist, path, fingerprint, context or "" }, "\0")
 end
 
 function M.new_state()
@@ -69,9 +88,18 @@ function M.in_flight_pop(state, key)
   return rec
 end
 
--- Look up a fresh cache entry for one file. Bumps LRU on hit.
-function M.lookup(state, specialist, path, fingerprint)
-  local key = M.entry_key(specialist, path, fingerprint)
+-- Look up a fresh cache entry for one file. A hit requires the file's own
+-- fingerprint AND the exact review context the verdict was rendered under.
+-- Entries without a context (legacy persisted rows) never hit, cold-starting
+-- the cache once across the schema change: context == nil is refused outright,
+-- and "" is refused because entry_key coerces a missing context to "" for the
+-- legacy key, so a ""-context lookup must not collide with legacy rows.
+-- (context_key never returns "".) Bumps LRU on hit.
+function M.lookup(state, specialist, path, fingerprint, context)
+  if context == nil or context == "" then
+    return nil
+  end
+  local key = M.entry_key(specialist, path, fingerprint, context)
   local entry = state.entries[key]
   if not entry then
     return nil
@@ -86,10 +114,12 @@ function M.lookup(state, specialist, path, fingerprint)
   return entry
 end
 
--- Record a review outcome for one file. Only parsed, known verdicts are
--- gate-satisfying; unparsable reviews are stored verbatim with verdict=nil.
+-- Record a review outcome for one file. entry.context is the scope context
+-- (M.context_key) the verdict was rendered under; nil stores a legacy row
+-- that satisfies nothing. Only parsed, known verdicts are gate-satisfying;
+-- unparsable reviews are stored verbatim with verdict=nil.
 function M.record(state, entry, cap)
-  local key = M.entry_key(entry.specialist, entry.path, entry.fingerprint)
+  local key = M.entry_key(entry.specialist, entry.path, entry.fingerprint, entry.context)
   if state.entries[key] == nil then
     state.order[#state.order + 1] = key
   end
@@ -233,6 +263,7 @@ local function persist(state, project_cwd)
     if e then
       entries[#entries + 1] = {
         specialist = e.specialist, path = e.path, fingerprint = e.fingerprint,
+        context = e.context,
         verdict = e.verdict, findings = e.findings, summary = e.summary,
         raw = e.raw, ts = e.ts,
       }

@@ -195,18 +195,20 @@ end
 function TestDispatch:test_review_cache_verdict_less_ledger_entries_are_cache_misses()
   local Ledger = require("specialist_subagents.ledger")
   local state = Ledger.new_state()
-  Ledger.record(state, {
-    specialist = "r", path = "a.lua", fingerprint = "fp1",
-    verdict = nil, raw = "garbage without a verdict line",
-  })
-  Ledger.record(state, {
-    specialist = "r", path = "b.lua", fingerprint = "fp2",
-    verdict = "approve", raw = "SUMMARY: ok\nVERDICT: approve",
-  })
+  -- the review context the pipeline looks entries up under
   local snap = { files = {
     { path = "a.lua", fingerprint = "fp1" },
     { path = "b.lua", fingerprint = "fp2" },
   } }
+  local ctx = Ledger.context_key(snap.files)
+  Ledger.record(state, {
+    specialist = "r", path = "a.lua", fingerprint = "fp1", context = ctx,
+    verdict = nil, raw = "garbage without a verdict line",
+  })
+  Ledger.record(state, {
+    specialist = "r", path = "b.lua", fingerprint = "fp2", context = ctx,
+    verdict = "approve", raw = "SUMMARY: ok\nVERDICT: approve",
+  })
   local target = { specialist = "r", kind = "review", scope = { files = {} } }
   local spec = { name = "r" }
 
@@ -224,7 +226,7 @@ function TestDispatch:test_review_cache_verdict_less_ledger_entries_are_cache_mi
 
   -- positive case: a verdict-bearing entry is served from cache
   Ledger.record(state, {
-    specialist = "r", path = "a.lua", fingerprint = "fp1",
+    specialist = "r", path = "a.lua", fingerprint = "fp1", context = ctx,
     verdict = "request-changes", raw = "SUMMARY: needs work\nVERDICT: request-changes",
   })
   files, cached = Dispatch._resolve_review_files(state, target, spec, snap, false)
@@ -310,20 +312,27 @@ end
 function TestDispatch:test_partial_cache_hit_suppresses_cached_findings_but_keeps_warning_and_coverage()
   local Ledger = require("specialist_subagents.ledger")
   local state = Ledger.new_state()
+  local snap = { files = {
+    { path = "a.lua", fingerprint = "fp-new" }, -- changed since the review
+    { path = "b.lua", fingerprint = "fp-b" },
+  } }
+  -- the a.lua entry was reviewed under the OLD scope context (before a.lua
+  -- changed); the b.lua entry under the current one
+  local old_ctx = Ledger.context_key({
+    { path = "a.lua", fingerprint = "fp-old" },
+    { path = "b.lua", fingerprint = "fp-b" },
+  })
+  local ctx = Ledger.context_key(snap.files)
   Ledger.record(state, {
-    specialist = "r", path = "a.lua", fingerprint = "fp-old",
+    specialist = "r", path = "a.lua", fingerprint = "fp-old", context = old_ctx,
     verdict = "request-changes",
     findings = { { text = "stale finding on a.lua" } },
     ts = 100,
   })
   Ledger.record(state, {
-    specialist = "r", path = "b.lua", fingerprint = "fp-b",
+    specialist = "r", path = "b.lua", fingerprint = "fp-b", context = ctx,
     verdict = "approve", findings = {}, ts = 100,
   })
-  local snap = { files = {
-    { path = "a.lua", fingerprint = "fp-new" }, -- changed since the review
-    { path = "b.lua", fingerprint = "fp-b" },
-  } }
   local target = { specialist = "r", kind = "review", scope = { files = {} } }
   local spec = { name = "r" }
 
@@ -376,6 +385,55 @@ function TestDispatch:test_full_cache_hit_replays_cached_findings()
   lu.assertStrContains(findings[1].text, "[a.lua] fix x")
 end
 
+-- _resolve_review_files returns the review context as a third value: the
+-- Ledger.context_key over the full scoped row set (fresh and cached files
+-- alike). A full-scope cache hit requires every recorded entry to carry
+-- exactly that context -- a mix of contexts never combines into a hit, and
+-- any scoped change moves the context and empties the cache.
+function TestDispatch:test_resolve_review_files_context_drives_full_cache_hit()
+  local Ledger = require("specialist_subagents.ledger")
+  local state = Ledger.new_state()
+  local snap = { files = {
+    { path = "a.lua", fingerprint = "fa" },
+    { path = "b.lua", fingerprint = "fb" },
+  } }
+  local target = { specialist = "r", kind = "review", scope = { files = {} } }
+  local spec = { name = "r" }
+
+  local files, cached, context = Dispatch._resolve_review_files(state, target, spec, snap, false)
+  lu.assertEquals(#files, 2)
+  lu.assertEquals(context, Ledger.context_key(snap.files),
+    "the third return value is context_key over the full scoped row set")
+
+  -- entries recorded under two different contexts (each fingerprint
+  -- matching its file) never combine into a hit for this scope's context
+  Ledger.record(state, { specialist = "r", path = "a.lua", fingerprint = "fa",
+    context = "review-context-a", verdict = "approve", ts = 1 })
+  Ledger.record(state, { specialist = "r", path = "b.lua", fingerprint = "fb",
+    context = "review-context-b", verdict = "approve", ts = 1 })
+  files, cached = Dispatch._resolve_review_files(state, target, spec, snap, false)
+  lu.assertEquals(#cached, 0, "no single review saw this scope's context: nothing hits")
+
+  -- recording under exactly the scope's context yields the full cache hit
+  for _, row in ipairs(snap.files) do
+    Ledger.record(state, {
+      specialist = "r", path = row.path, fingerprint = row.fingerprint,
+      context = context, verdict = "approve", ts = 2,
+    })
+  end
+  files, cached = Dispatch._resolve_review_files(state, target, spec, snap, false)
+  lu.assertEquals(#cached, 2, "entries carrying exactly the scope context all hit")
+  for _, f in ipairs(files) do
+    lu.assertTrue(f.cached ~= nil)
+  end
+
+  -- a sibling fingerprint change moves the context: the hit is gone
+  snap.files[2].fingerprint = "fb-changed"
+  files, cached = Dispatch._resolve_review_files(state, target, spec, snap, false)
+  lu.assertEquals(#cached, 0,
+    "a scoped change moves the context and empties the cache")
+end
+
 -- A persist failure must not be swallowed: record_ledger warns via the
 -- pipeline's warn_log convention.
 function TestDispatch:test_record_ledger_persist_error_warns()
@@ -403,15 +461,24 @@ end
 
 -- reviews_lookup must report every specialist that covered a path (newest
 -- first), not only the newest entry, and count files in the summary.
+-- Freshness is context-relative: an older review of the same file content
+-- under a different (older) scope is still listed, but annotated stale and
+-- never counts towards coverage.
 function TestDispatch:test_reviews_lookup_reports_all_specialists_per_path()
   local Ledger = require("specialist_subagents.ledger")
+  local Git = require("specialist_subagents.git")
   local state = Ledger.new_state()
+  -- files-basis over a.lua; the stub reads every file as "content", so the
+  -- live fingerprint is fnv1a("content")
+  local fp = Git.fnv1a("content")
+  local ctx = Ledger.context_key({ { path = "a.lua", fingerprint = fp } })
+  local old_ctx = Ledger.context_key({
+    { path = "a.lua", fingerprint = fp }, { path = "sibling.lua", fingerprint = "fp-sib" },
+  })
   Ledger.record(state, { specialist = "old-reviewer", path = "a.lua",
-    fingerprint = "fp1", verdict = "approve", ts = 1000 })
+    fingerprint = fp, context = old_ctx, verdict = "approve", ts = 1000 })
   Ledger.record(state, { specialist = "new-reviewer", path = "a.lua",
-    fingerprint = "fp2", verdict = "request-changes", ts = 2000 })
-  Ledger.record(state, { specialist = "new-reviewer", path = "b.lua",
-    fingerprint = "fp3", verdict = "approve", ts = 2000 })
+    fingerprint = fp, context = ctx, verdict = "request-changes", ts = 2000 })
   Dispatch._state.ledgers["/tmp/fake-proj"] = state
   _G.maki = {
     uv = { cwd = function() return "/tmp/fake-proj" end },
@@ -432,7 +499,22 @@ function TestDispatch:test_reviews_lookup_reports_all_specialists_per_path()
   lu.assertTrue(new_pos < old_pos, "rows are newest first")
   lu.assertStrContains(text, "request-changes")
   lu.assertStrContains(text, "approve")
-  lu.assertStrContains(text, "1 of 1 file(s) have ledger coverage") -- summary counts files, not rows
+  local stale_line, fresh_line
+  for line in text:gmatch("[^\n]+") do
+    if line:find("old-reviewer", 1, true) then
+      stale_line = line
+    elseif line:find("new-reviewer", 1, true) then
+      fresh_line = line
+    end
+  end
+  lu.assertTrue(stale_line ~= nil and fresh_line ~= nil, "both specialists rendered")
+  lu.assertStrContains(stale_line, "; stale context",
+    "the old-scope review is annotated stale")
+  lu.assertEquals(fresh_line:find("; stale context", 1, true), nil,
+    "the current-context review is fresh")
+  lu.assertStrContains(text,
+    "1 of 1 file(s) have fresh ledger coverage (file content and review scope unchanged since the review).",
+    false, "only the current-context review counts as coverage")
 
   -- a path with no ledger entries is still reported UNREVIEWED
   _G.maki = {
@@ -450,7 +532,8 @@ function TestDispatch:test_reviews_lookup_reports_all_specialists_per_path()
   lu.assertTrue(ok, "reviews_lookup runs: " .. tostring(text))
 
   lu.assertStrContains(text, "UNREVIEWED")
-  lu.assertStrContains(text, "0 of 1 file(s) have ledger coverage")
+  lu.assertStrContains(text,
+    "0 of 1 file(s) have fresh ledger coverage (file content and review scope unchanged since the review).")
 end
 
 -- Regression: the active-claims registry drops rows by identity, not by
@@ -556,10 +639,14 @@ function TestDispatch:test_reviews_lookup_plan_basis_surfaces_snapshot_reason()
   lu.assertNotEquals(text, "error: nil")
 
   -- (c) happy path: a ready plan is covered by its ledger row
+  local Git = require("specialist_subagents.git")
+  local fp_plan = Git.fnv1a("planned work")
   local state = Ledger.new_state()
   Ledger.record(state, {
     specialist = "tech-writer", path = "plan.md",
-    fingerprint = "fp-plan", verdict = "approve",
+    fingerprint = fp_plan,
+    context = Ledger.context_key({ { path = "plan.md", fingerprint = fp_plan } }),
+    verdict = "approve",
   })
   Dispatch._state.ledgers["/tmp/fake-proj"] = state
   _G.maki = {
@@ -574,7 +661,8 @@ function TestDispatch:test_reviews_lookup_plan_basis_surfaces_snapshot_reason()
   lu.assertEquals(is_err, nil)
   lu.assertStrContains(text, "plan.md")
   lu.assertStrContains(text, "tech-writer")
-  lu.assertStrContains(text, "1 of 1 file(s) have ledger coverage")
+  lu.assertStrContains(text,
+    "1 of 1 file(s) have fresh ledger coverage (file content and review scope unchanged since the review).")
 end
 
 -- Regression: ledger entries without ts are legitimate (Ledger.record
@@ -583,10 +671,30 @@ end
 -- "age unknown" and ts-bearing companions still render an age.
 function TestDispatch:test_reviews_lookup_survives_entries_with_nil_timestamp()
   local Ledger = require("specialist_subagents.ledger")
+  local Git = require("specialist_subagents.git")
+  -- the stub reads every file as "content", so the live fingerprint is
+  -- fnv1a("content"); the two queries below have different scopes, and
+  -- freshness is scope-relative, so their entries carry different contexts
+  local fp = Git.fnv1a("content")
+  local ctx_a = Ledger.context_key({ { path = "a.lua", fingerprint = fp } })
+  local ctx_ab = Ledger.context_key({
+    { path = "a.lua", fingerprint = fp }, { path = "b.lua", fingerprint = fp },
+  })
   local state = Ledger.new_state()
   Ledger.record(state, {
-    specialist = "x", path = "a.lua", fingerprint = "fp1", verdict = "approve",
+    specialist = "x", path = "a.lua", fingerprint = fp, context = ctx_a,
+    verdict = "approve",
   }) -- deliberately no ts
+  -- entries for the {a.lua, b.lua} scope: z is fresh for a.lua and y for
+  -- b.lua under that (wider) query context
+  Ledger.record(state, {
+    specialist = "z", path = "a.lua", fingerprint = fp, context = ctx_ab,
+    verdict = "approve", ts = os.time() - 3600,
+  })
+  Ledger.record(state, {
+    specialist = "y", path = "b.lua", fingerprint = fp, context = ctx_ab,
+    verdict = "approve", ts = os.time() - 3600,
+  })
   Dispatch._state.ledgers["/tmp/fake-proj"] = state
   _G.maki = {
     uv = { cwd = function() return "/tmp/fake-proj" end },
@@ -600,21 +708,19 @@ function TestDispatch:test_reviews_lookup_survives_entries_with_nil_timestamp()
   local ok, text = pcall(Dispatch.reviews_lookup, nil, { basis = "files", files = { "a.lua" } })
   lu.assertTrue(ok, "reviews_lookup does not raise on a ts-less entry: " .. tostring(text))
   lu.assertStrContains(text, "x")
-  lu.assertStrContains(text, "1 of 1 file(s) have ledger coverage")
+  lu.assertStrContains(text,
+    "1 of 1 file(s) have fresh ledger coverage (file content and review scope unchanged since the review).")
   lu.assertStrContains(text, "age unknown", "the ts-less row renders instead of crashing")
 
   -- a companion ts-bearing entry still renders an "Ns ago" age
-  Ledger.record(state, {
-    specialist = "y", path = "b.lua", fingerprint = "fp2",
-    verdict = "approve", ts = os.time() - 3600,
-  })
   _G.maki.fs.glob = function() return { "/tmp/fake-proj/a.lua", "/tmp/fake-proj/b.lua" } end
   ok, text = pcall(Dispatch.reviews_lookup, nil, { basis = "files", files = { "a.lua", "b.lua" } })
   _G.maki = nil
   Dispatch._state.ledgers["/tmp/fake-proj"] = nil
   lu.assertTrue(ok, "reviews_lookup still runs: " .. tostring(text))
   lu.assertTrue(text:find("%ds ago") ~= nil, "the ts-bearing row renders an age")
-  lu.assertStrContains(text, "2 of 2 file(s) have ledger coverage")
+  lu.assertStrContains(text,
+    "2 of 2 file(s) have fresh ledger coverage (file content and review scope unchanged since the review).")
 end
 
 -- ---------------------------------------------------------------------------

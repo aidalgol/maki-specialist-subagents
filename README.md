@@ -8,17 +8,17 @@ SPDX-License-Identifier: MIT
 
 Maki plugin for defining custom specialist subagents with delegation workflows
 built into the harness: a two-type specialist system, nested delegation, a
-content-addressed review ledger that deduplicates reviews, and budgets that
-make deep delegation trees safe. It is inspired by the generic agent
-definitions in other coding agents such as OpenCode, but avoids the pitfalls
-of generic subagent harnesses.
+review ledger that deduplicates reviews by file content and review scope, and
+budgets that make deep delegation trees safe. It is inspired by the generic
+agent definitions in other coding agents such as OpenCode, but avoids the
+pitfalls of generic subagent harnesses.
 
 ## What it gives you
 
 | Tool / command             | Audience    | Purpose                                                                                                                                                                                                                                |
 | -------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `delegate`                 | main only   | Dispatch specialists: one scalar dispatch, or a `targets` list that fans out in parallel and returns one aggregated report. `background = true` runs the dispatch in the background; `action` queries or reaches in-flight dispatches. |
-| `specialist_reviews`       | main + subs | Read-only ledger query: which changed files already have review coverage.                                                                                                                                                              |
+| `specialist_reviews`       | main + subs | Read-only ledger query: which changed files have review coverage that is fresh against the current file content and review scope.                                                                                                      |
 | `/specialists`             | user        | Catalog, live invocations, recent coverage.                                                                                                                                                                                            |
 | bundled skill              | main        | `specialist-subagents` skill teaching the agent how to author specialist definitions; see [Bundled skill](#bundled-skill).                                                                                                             |
 | prompt hint (`tool_usage`) | main        | Fresh catalog plus delegation guidance, rebuilt every run.                                                                                                                                                                             |
@@ -400,8 +400,15 @@ require("specialist_subagents").setup({
 ```
 
 The ledger persists under `~/.local/state/maki/specialists/<hash(project
-cwd)>/ledger.json`; fingerprints self-invalidate stale entries
-semantically.
+cwd)>/ledger.json`. Entries are keyed by the reviewed file's fingerprint and
+the review-time scope context (a hash over every file in the reviewed set).
+A verdict is reused only when a later dispatch presents the same context: the
+same files, unchanged. A change to any file in the scope therefore invalidates
+the verdicts of its siblings too, because the reviewer renders one
+changeset-level verdict against the whole diff. Entries persisted by older
+plugin versions carry no context and never hit. The first review after the
+upgrade therefore re-reviews and re-records. `force_review = true` still
+bypasses the cache explicitly.
 
 ## Development
 

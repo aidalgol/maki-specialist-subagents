@@ -591,27 +591,35 @@ local function resolve_review_files(state, target, spec, snap, force_review)
   for _, f in ipairs(snap.files) do
     by_path[f.path] = f
   end
-  local out, cached = {}, {}
+  local scoped_rows = {}
   for _, path in ipairs(scoped) do
     local f = by_path[path]
     if f then
-      local entry = nil
-      if not force_review then
-        entry = Ledger.lookup(state, spec.name, path, f.fingerprint)
-        if entry and not entry.verdict then
-          -- an unparsable review satisfies nothing, the cache included:
-          -- combined_verdict defaults to approve, so a verdict-less cached
-          -- entry would approve unchanged files without any review
-          entry = nil
-        end
-      end
-      out[#out + 1] = { path = path, fingerprint = f.fingerprint, cached = entry }
-      if entry then
-        cached[#cached + 1] = entry
-      end
+      scoped_rows[#scoped_rows + 1] = { path = path, fingerprint = f.fingerprint }
     end
   end
-  return out, cached
+  -- The review context is the full scope the reviewer sees (fresh and
+  -- cached files alike), computed before cache resolution: it depends on the
+  -- scope, not on what the cache happens to hold.
+  local context = Ledger.context_key(scoped_rows)
+  local out, cached = {}, {}
+  for _, row in ipairs(scoped_rows) do
+    local entry = nil
+    if not force_review then
+      entry = Ledger.lookup(state, spec.name, row.path, row.fingerprint, context)
+      if entry and not entry.verdict then
+        -- an unparsable review satisfies nothing, the cache included:
+        -- combined_verdict defaults to approve, so a verdict-less cached
+        -- entry would approve unchanged files without any review
+        entry = nil
+      end
+    end
+    out[#out + 1] = { path = row.path, fingerprint = row.fingerprint, cached = entry }
+    if entry then
+      cached[#cached + 1] = entry
+    end
+  end
+  return out, cached, context
 end
 
 local function combined_verdict(entries)
@@ -694,13 +702,20 @@ end
 -- Per-target pipeline
 -- ---------------------------------------------------------------------------
 
-local function record_ledger(state, spec, files, parsed, cwd)
+-- Record the session's review outcome for every scoped file under the
+-- session's review context. The reviewer sees the full scope (file list plus
+-- diff), so the fresh verdict covers every scoped file, including ones that
+-- also had cached entries. The fresh entries supersede the cached ones for
+-- identical later dispatches, while the cached entries remain under their
+-- recorded context, because nothing is overwritten across contexts.
+local function record_ledger(state, spec, files, parsed, cwd, context)
   local ts = now()
   for _, f in ipairs(files) do
     Ledger.record(state, {
       specialist = spec.name,
       path = f.path,
       fingerprint = f.fingerprint,
+      context = context,
       verdict = parsed.verdict, -- nil when unparsable: satisfies nothing
       findings = parsed.findings,
       summary = parsed.summary,
@@ -720,9 +735,11 @@ end
 -- (and to coverage, via the cached entries the caller keeps), but do NOT
 -- replay cached findings into the result. Findings are changeset-level free
 -- text stored on every per-file ledger entry, so a cached finding's subject
--- may well be the one file that changed — a partial hit cannot prove
--- otherwise. Only a full-cache hit (every file's content unchanged since the
--- review, checked above) makes replay sound.
+-- may well be the one file that changed. Only a full-cache hit makes replay
+-- sound: a hit requires every file's fingerprint AND the review context (the
+-- hash over the whole scoped file set) to match, so every replayed verdict
+-- was rendered by a review that saw exactly this combination of file
+-- contents — no replay can combine verdicts from different reviews.
 local function apply_partial_cache(result, files, cached_entries)
   local cv = combined_verdict(cached_entries)
   result.warnings[#result.warnings + 1] = string.format(
@@ -873,9 +890,10 @@ local function run_target(ctx, target, invoker, call)
   local state = ledger_for(cwd)
   local files = {}
   local cached_entries = {}
+  local review_context = nil
   if kind == "review" then
-    local scoped_files, cached = resolve_review_files(state, target, spec, snap, target.force_review)
-    files, cached_entries = scoped_files, cached
+    local scoped_files, cached, context = resolve_review_files(state, target, spec, snap, target.force_review)
+    files, cached_entries, review_context = scoped_files, cached, context
     for _, f in ipairs(files) do
       result.scope_files[#result.scope_files + 1] = f.path
     end
@@ -886,7 +904,9 @@ local function run_target(ctx, target, invoker, call)
       return result
     end
     if #cached_entries == #files then
-      -- all files have fresh entries -> done, no session
+      -- all files have fresh entries under the session's context -> done, no
+      -- session; sound because a hit already proves every verdict was
+      -- rendered against exactly this scope combination
       local verdict, findings, summary = combined_verdict(cached_entries)
       result.status = "done"
       result.cached = true
@@ -896,7 +916,9 @@ local function run_target(ctx, target, invoker, call)
       result.tokens = { input = 0, output = 0 }
       return result
     end
-    -- partial cache: review only the unresolved subset, attach cached verdicts
+    -- partial cache: cached entries feed the warning below (and coverage via
+    -- the caller); the reviewer still sees and re-reviews the full scope, so
+    -- every scoped file is re-recorded under the session's context
     if #cached_entries > 0 then
       apply_partial_cache(result, files, cached_entries)
     end
@@ -1073,7 +1095,7 @@ local function run_target(ctx, target, invoker, call)
       store_finished(result._join_key, result)
       Ledger.in_flight_pop(state, result._join_key)
     end
-    record_ledger(state, spec, files, parsed, cwd)
+    record_ledger(state, spec, files, parsed, cwd, review_context)
   elseif kind == "consult" then
     -- no ledger, no fingerprints, no iteration bump: the answer is the
     -- deliverable and comes back as the report
@@ -1476,14 +1498,14 @@ function M.reviews_lookup(ctx, input)
   local cwd = maki.uv.cwd()
   local state = ledger_for(cwd)
   local basis = input.basis or "changed"
-  local paths = {}
+  local rows = {}
   if basis == "plan" then
     local snap, perr = plan_snapshot(cwd)
     if not snap then
       return "error: " .. tostring(perr), true
     end
     for _, f in ipairs(snap.files) do
-      paths[#paths + 1] = f.path
+      rows[#rows + 1] = f
     end
   elseif basis == "files" then
     local snap, ferr = files_snapshot(cwd, {
@@ -1494,7 +1516,7 @@ function M.reviews_lookup(ctx, input)
       return "error: " .. tostring(ferr), true
     end
     for _, f in ipairs(snap.files) do
-      paths[#paths + 1] = f.path
+      rows[#rows + 1] = f
     end
   else
     local snap = Git.changed_snapshot(cwd, nil)
@@ -1502,14 +1524,32 @@ function M.reviews_lookup(ctx, input)
     for _, f in ipairs(snap.files) do
       all[#all + 1] = f.path
     end
-    paths = Git.filter_by_globs(all, type(input.files) == "table" and input.files or nil)
+    local keep = {}
+    for _, p in ipairs(Git.filter_by_globs(all, type(input.files) == "table" and input.files or nil)) do
+      keep[p] = true
+    end
+    for _, f in ipairs(snap.files) do
+      if keep[f.path] then
+        rows[#rows + 1] = f
+      end
+    end
   end
-  if #paths == 0 then
+  if #rows == 0 then
     return "No changed files match. Nothing to report."
+  end
+  -- Freshness is context-relative: a verdict only counts as coverage when its
+  -- recorded context matches the context of the current scope combination
+  -- (same construction as the review pipeline's cache lookup, without the
+  -- LRU bump a Ledger.lookup here would cause).
+  local context = Ledger.context_key(rows)
+  local fp_by_path = {}
+  for _, r in ipairs(rows) do
+    fp_by_path[r.path] = r.fingerprint
   end
   local out = { "Review coverage per file (from the persisted ledger):" }
   local covered = 0
-  for _, path in ipairs(paths) do
+  for _, row in ipairs(rows) do
+    local path = row.path
     -- All specialists that covered the path, newest first: one row per
     -- (path, specialist), so a second specialist's coverage is not shadowed
     -- by a newer entry from the first. Repeat reviews by the same specialist
@@ -1525,11 +1565,19 @@ function M.reviews_lookup(ctx, input)
       end
     end
     local hits = {}
+    local fresh = false
     for _, e in pairs(newest_per_specialist) do
       hits[#hits + 1] = e
+      -- an unparsable entry satisfies nothing, coverage included
+      if e.context == context and e.fingerprint == fp_by_path[path]
+        and e.verdict ~= nil then
+        fresh = true
+      end
     end
     if #hits > 0 then
-      covered = covered + 1
+      if fresh then
+        covered = covered + 1
+      end
       table.sort(hits, function(a, b)
         return (a.ts or 0) > (b.ts or 0)
       end)
@@ -1538,14 +1586,19 @@ function M.reviews_lookup(ctx, input)
         -- input verbatim); branch rather than feed a string to %d.
         local age_str = e.ts and string.format("%ds ago", os.time() - e.ts)
           or "age unknown"
-        out[#out + 1] = string.format(" %-46s %-24s %-16s (%s)",
-          path, e.specialist, e.verdict or "unparsed", age_str)
+        local stale = not (e.context == context and e.fingerprint == fp_by_path[path]
+          and e.verdict ~= nil)
+        out[#out + 1] = string.format(" %-46s %-24s %-16s (%s%s)",
+          path, e.specialist, e.verdict or "unparsed", age_str,
+          stale and "; stale context" or "")
       end
     else
       out[#out + 1] = string.format(" %-46s %-24s %s", path, "-", "UNREVIEWED")
     end
   end
-  out[#out + 1] = string.format("%d of %d file(s) have ledger coverage.", covered, #paths)
+  out[#out + 1] = string.format(
+    "%d of %d file(s) have fresh ledger coverage (file content and review scope unchanged since the review).",
+    covered, #rows)
   return table.concat(out, "\n")
 end
 

@@ -182,6 +182,39 @@ local function stub_maki(text)
   }
 end
 
+-- Minimal encoder for the persist-side round trip: enough for the flat
+-- ledger entry tables persist() writes (nil fields are skipped, matching
+-- how maki.json.encode drops absent keys).
+local function stub_json_encode(v)
+  if type(v) == "string" then
+    return '"' .. v:gsub("\\", "\\\\"):gsub('"', '\\"') .. '"'
+  end
+  if type(v) == "number" or type(v) == "boolean" then
+    return tostring(v)
+  end
+  if type(v) == "table" then
+    local parts = {}
+    if #v > 0 then
+      for _, item in ipairs(v) do
+        parts[#parts + 1] = stub_json_encode(item)
+      end
+      return "[" .. table.concat(parts, ",") .. "]"
+    end
+    local keys = {}
+    for k in pairs(v) do
+      keys[#keys + 1] = k
+    end
+    table.sort(keys)
+    for _, k in ipairs(keys) do
+      if v[k] ~= nil then
+        parts[#parts + 1] = stub_json_encode(k) .. ":" .. stub_json_encode(v[k])
+      end
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+  end
+  return "null"
+end
+
 local LEDGER_WITH_NULLS = [[
 {
   "version": 1,
@@ -214,24 +247,30 @@ end
 
 function TestLedger:test_record_and_lookup_fresh_fingerprint_hits_stale_misses()
   local st = Ledger.new_state()
+  local ctx = Ledger.context_key({ { path = "a.lua", fingerprint = "fp1" } })
   Ledger.record(st, {
-    specialist = "r", path = "a.lua", fingerprint = "fp1",
+    specialist = "r", path = "a.lua", fingerprint = "fp1", context = ctx,
     verdict = "approve", findings = {}, summary = "ok", ts = 1,
   })
-  local hit = Ledger.lookup(st, "r", "a.lua", "fp1")
+  local hit = Ledger.lookup(st, "r", "a.lua", "fp1", ctx)
   lu.assertTrue(hit ~= nil)
   lu.assertEquals(hit.verdict, "approve")
-  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fp2"), nil)
-  lu.assertEquals(Ledger.lookup(st, "other", "a.lua", "fp1"), nil)
+  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fp2", ctx), nil)
+  lu.assertEquals(Ledger.lookup(st, "other", "a.lua", "fp1", ctx), nil)
+  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fp1", "different-context"), nil,
+    "a context mismatch is a miss")
+  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fp1", nil), nil,
+    "a context-less (legacy-mode) lookup never hits")
 end
 
 function TestLedger:test_record_unparsable_reviews_store_verbatim_and_satisfy_nothing()
   local st = Ledger.new_state()
+  local ctx = Ledger.context_key({ { path = "a.lua", fingerprint = "fp" } })
   Ledger.record(st, {
-    specialist = "r", path = "a.lua", fingerprint = "fp",
+    specialist = "r", path = "a.lua", fingerprint = "fp", context = ctx,
     verdict = nil, raw = "unparsable tail", ts = 1,
   })
-  local hit = Ledger.lookup(st, "r", "a.lua", "fp")
+  local hit = Ledger.lookup(st, "r", "a.lua", "fp", ctx)
   lu.assertTrue(hit ~= nil)
   lu.assertEquals(hit.verdict, nil)
   lu.assertEquals(hit.raw, "unparsable tail")
@@ -240,29 +279,214 @@ end
 function TestLedger:test_lru_cap_evicts_the_oldest_entries()
   local st = Ledger.new_state()
   st.cap = 3
+  local ctx = "ctx"
   for i = 1, 4 do
     Ledger.record(st, {
-      specialist = "r", path = "p" .. i, fingerprint = "fp",
+      specialist = "r", path = "p" .. i, fingerprint = "fp", context = ctx,
       verdict = "approve", ts = i,
     })
   end
-  lu.assertEquals(Ledger.lookup(st, "r", "p1", "fp"), nil, "oldest evicted")
-  lu.assertTrue(Ledger.lookup(st, "r", "p4", "fp") ~= nil)
+  lu.assertEquals(Ledger.lookup(st, "r", "p1", "fp", ctx), nil, "oldest evicted")
+  lu.assertTrue(Ledger.lookup(st, "r", "p4", "fp", ctx) ~= nil)
   lu.assertTrue(#st.order <= 3)
 end
 
 function TestLedger:test_lookup_bumps_recency()
   local st = Ledger.new_state()
   st.cap = 2
+  local ctx = "ctx"
   for i = 1, 2 do
     Ledger.record(st, {
-      specialist = "r", path = "p" .. i, fingerprint = "fp", verdict = "approve", ts = i,
+      specialist = "r", path = "p" .. i, fingerprint = "fp", context = ctx,
+      verdict = "approve", ts = i,
     })
   end
-  Ledger.lookup(st, "r", "p1", "fp") -- p1 becomes newest
-  Ledger.record(st, { specialist = "r", path = "p3", fingerprint = "fp", verdict = "approve", ts = 9 })
-  lu.assertTrue(Ledger.lookup(st, "r", "p1", "fp") ~= nil, "recently used p1 survives")
-  lu.assertEquals(Ledger.lookup(st, "r", "p2", "fp"), nil, "p2 was oldest and evicted")
+  Ledger.lookup(st, "r", "p1", "fp", ctx) -- p1 becomes newest
+  Ledger.record(st, {
+    specialist = "r", path = "p3", fingerprint = "fp", context = ctx,
+    verdict = "approve", ts = 9,
+  })
+  lu.assertTrue(Ledger.lookup(st, "r", "p1", "fp", ctx) ~= nil, "recently used p1 survives")
+  lu.assertEquals(Ledger.lookup(st, "r", "p2", "fp", ctx), nil, "p2 was oldest and evicted")
+end
+
+-- context_key: order-independent over the row list, sensitive to any path
+-- or fingerprint change, and total on nil/empty input (empty-scope reviews
+-- are refused upstream, but the pure core must stay total).
+function TestLedger:test_context_key_order_independent_and_scope_sensitive()
+  local ab = {
+    { path = "a.lua", fingerprint = "fp1" },
+    { path = "b.lua", fingerprint = "fp2" },
+  }
+  local ba = {
+    { path = "b.lua", fingerprint = "fp2" },
+    { path = "a.lua", fingerprint = "fp1" },
+  }
+  lu.assertEquals(Ledger.context_key(ab), Ledger.context_key(ba), "row order does not matter")
+  lu.assertEquals(Ledger.context_key(nil), Ledger.context_key({}), "nil and empty are both total")
+  lu.assertTrue(Ledger.context_key(ab) ~= Ledger.context_key({
+    { path = "a.lua", fingerprint = "fp1" }, { path = "b.lua", fingerprint = "changed" },
+  }), "a sibling fingerprint change changes the context")
+  lu.assertTrue(Ledger.context_key(ab) ~= Ledger.context_key({
+    { path = "a.lua", fingerprint = "fp1" }, { path = "c.lua", fingerprint = "fp2" },
+  }), "a path change changes the context")
+  lu.assertTrue(Ledger.context_key(ab) ~= Ledger.context_key({
+    { path = "a.lua", fingerprint = "fp1" },
+  }), "removing a scope member changes the context")
+end
+
+-- A hit requires the file's own fingerprint AND the review context: a
+-- sibling change (with the file unchanged) and the file's own change both
+-- miss, even though the entry itself is intact.
+function TestLedger:test_lookup_requires_context_and_fingerprint_match()
+  local st = Ledger.new_state()
+  local ctx = Ledger.context_key({
+    { path = "a.lua", fingerprint = "fa" },
+    { path = "b.lua", fingerprint = "fb" },
+  })
+  Ledger.record(st, {
+    specialist = "r", path = "a.lua", fingerprint = "fa", context = ctx,
+    verdict = "approve", ts = 1,
+  })
+  lu.assertTrue(Ledger.lookup(st, "r", "a.lua", "fa", ctx) ~= nil, "context match hits")
+  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fa", Ledger.context_key({
+    { path = "a.lua", fingerprint = "fa" }, { path = "b.lua", fingerprint = "fb2" },
+  })), nil, "a sibling change invalidates the sibling verdict")
+  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fa-changed", Ledger.context_key({
+    { path = "a.lua", fingerprint = "fa-changed" }, { path = "b.lua", fingerprint = "fb" },
+  })), nil, "the file's own fingerprint change misses")
+  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fa", ""), nil,
+    "an empty-string context lookup misses even with the matching fingerprint: "
+    .. "entry_key coerces a missing context to \"\", so \"\" must not collide "
+    .. "with any recorded context")
+end
+
+-- Legacy rows (context == nil, e.g. persisted before the context-keyed
+-- schema, or loaded from a ledger file with no context field) never satisfy
+-- a context-bearing lookup and never raise: the cache cold-starts once
+-- across the schema change.
+function TestLedger:test_legacy_entries_never_hit_context_lookups()
+  local st = Ledger.new_state()
+  Ledger.record(st, {
+    specialist = "r", path = "a.lua", fingerprint = "fp1",
+    verdict = "approve", ts = 1,
+  }) -- no context: legacy row
+  local ctx = Ledger.context_key({ { path = "a.lua", fingerprint = "fp1" } })
+  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fp1", ctx), nil,
+    "a legacy row never satisfies a context-bearing lookup")
+  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fp1", nil), nil,
+    "a context-less lookup never hits")
+  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fp1", ""), nil,
+    "an empty-string lookup never hits a legacy row: the legacy key collapses "
+    .. "to context \"\", but a \"\"-context lookup is refused outright")
+
+  -- the same holds for legacy rows loaded from a persisted ledger file
+  _G.maki = stub_maki(LEDGER_WITH_NULLS)
+  local ok, lstate = pcall(Ledger.load_state, "/proj")
+  _G.maki = nil
+  lu.assertTrue(ok)
+  lu.assertEquals(
+    Ledger.lookup(lstate, "lua-code-reviewer", "a.lua", "fp1", ctx), nil,
+    "a persisted legacy row loads but never hits a context lookup")
+end
+
+-- The context field survives persistence: a context-bearing row written by
+-- persist() and reloaded through load_state still hits its lookup. The stub
+-- captures the real atomic_write payload, so the write-side serialization is
+-- exercised, not just the load side.
+function TestLedger:test_context_round_trips_through_persistence()
+  local ctx = Ledger.context_key({ { path = "a.lua", fingerprint = "fp1" } })
+  local st = Ledger.new_state()
+  Ledger.record(st, {
+    specialist = "r", path = "a.lua", fingerprint = "fp1", context = ctx,
+    verdict = "approve", ts = 7,
+  })
+  local written = nil
+  _G.maki = {
+    env = { state_dir = function() return "/fake/state" end },
+    log = { debug = function() end },
+    fs = {
+      joinpath = function(...) return table.concat({ ... }, "/") end,
+      normalize = function(p) return p end,
+      mkdir = function() end,
+      atomic_write = function(_, payload)
+        written = payload
+        return true
+      end,
+      read = function() return written end,
+    },
+    json = { decode = stub_json_decode, encode = stub_json_encode },
+  }
+  local ok_p, perr = Ledger.persist(st, "/proj")
+  lu.assertTrue(ok_p, "persist succeeds: " .. tostring(perr))
+  lu.assertTrue(written ~= nil, "atomic_write captured a payload")
+  lu.assertStrContains(written, ctx, "the payload carries the context field")
+
+  local ok_l, state = pcall(Ledger.load_state, "/proj")
+  _G.maki = nil
+  lu.assertTrue(ok_l)
+  local hit = Ledger.lookup(state, "r", "a.lua", "fp1", ctx)
+  lu.assertTrue(hit ~= nil, "a reloaded context-bearing row hits its lookup")
+  lu.assertEquals(hit.verdict, "approve")
+  lu.assertEquals(hit.context, ctx)
+end
+
+-- Two review contexts coexist for the same (specialist, path): each hits
+-- with its own context, neither hits with the other's, and LRU eviction
+-- spans the combined keyspace (a context-A slot and its context-B sibling
+-- are separate entries).
+function TestLedger:test_two_contexts_coexist_per_specialist_path()
+  local st = Ledger.new_state()
+  st.cap = 3
+  local ctx_a, ctx_b = "ctx-a", "ctx-b"
+  Ledger.record(st, {
+    specialist = "r", path = "p1", fingerprint = "fp", context = ctx_a,
+    verdict = "approve", ts = 1,
+  })
+  Ledger.record(st, {
+    specialist = "r", path = "p1", fingerprint = "fp", context = ctx_b,
+    verdict = "approve", ts = 2,
+  })
+  lu.assertTrue(Ledger.lookup(st, "r", "p1", "fp", ctx_a) ~= nil, "the context-A entry hits")
+  lu.assertTrue(Ledger.lookup(st, "r", "p1", "fp", ctx_b) ~= nil,
+    "the context-B entry coexists instead of overwriting it")
+  -- each lookup bumped its own LRU slot; filling the cap evicts only the
+  -- context-A slot, proving the two contexts occupy separate slots
+  Ledger.record(st, {
+    specialist = "r", path = "p2", fingerprint = "fp", context = ctx_a,
+    verdict = "approve", ts = 3,
+  })
+  Ledger.record(st, {
+    specialist = "r", path = "p3", fingerprint = "fp", context = ctx_a,
+    verdict = "approve", ts = 4,
+  })
+  lu.assertEquals(Ledger.lookup(st, "r", "p1", "fp", ctx_a), nil,
+    "the (no longer recent) context-A slot was evicted")
+  lu.assertTrue(Ledger.lookup(st, "r", "p1", "fp", ctx_b) ~= nil,
+    "the recently used context-B slot survives the same eviction")
+end
+
+-- Soundness of full-cache-hit replay: entries recorded under context A
+-- and context B must never combine into a cache hit for a third context C,
+-- even when every file fingerprint matches. No single review saw C's
+-- combination of file contents, so no lookup under C may hit.
+function TestLedger:test_full_cache_hit_never_combines_verdicts_across_contexts()
+  local st = Ledger.new_state()
+  local r_a = { path = "a.lua", fingerprint = "fa" }
+  local r_b = { path = "b.lua", fingerprint = "fb" }
+  Ledger.record(st, {
+    specialist = "r", path = "a.lua", fingerprint = "fa", context = Ledger.context_key({ r_a }),
+    verdict = "approve", ts = 1,
+  })
+  Ledger.record(st, {
+    specialist = "r", path = "b.lua", fingerprint = "fb", context = Ledger.context_key({ r_b }),
+    verdict = "approve", ts = 1,
+  })
+  local ctx_c = Ledger.context_key({ r_a, r_b })
+  lu.assertEquals(Ledger.lookup(st, "r", "a.lua", "fa", ctx_c), nil,
+    "a lookup under a context no single review saw must miss")
+  lu.assertEquals(Ledger.lookup(st, "r", "b.lua", "fb", ctx_c), nil,
+    "the sibling file misses under the combined context too")
 end
 
 function TestLedger:test_in_flight_registry_put_get_pop()
