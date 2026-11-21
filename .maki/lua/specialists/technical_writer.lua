@@ -8,7 +8,7 @@
 return {
   name = "technical-writer",
   type = "review",
-  description = "Reviews documentation and prose against the red-hat technical writing style.",
+  description = "Reviews documentation and prose against the red-hat technical writing style and flags AI tells with the humanizer skill.",
   instructions = "technical-writer.md",
   model = { spec = "synthetic/hf:zai-org/GLM-5.3" },
   review = { files = { "**/*.md" } },
