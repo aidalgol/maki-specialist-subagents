@@ -173,4 +173,82 @@ function TestPermissions:test_relay_layer_shape_pass_through_contract_honoured()
   end
 end
 
+function TestPermissions:test_diff_new_task_attributes_the_fresh_ours_entry()
+  -- The list snapshot taken before opening the session rules out everything
+  -- that was already there; only a new, ours-plugin, "name:kind" entry
+  -- counts. Entries may share the display name with other specialists.
+  local tasks = {
+    { id = "sub-old", plugin = "project/init.lua", name = "rust-reviewer:review" },
+    { id = "sub-foreign", plugin = "other-plugin", name = "rust-reviewer:review" },
+    { id = "sub-new", plugin = "specialist-subagents", name = "rust-reviewer:review" },
+  }
+  lu.assertEquals(Permissions.diff_new_task(tasks, { ["sub-old"] = true, ["sub-foreign"] = true },
+      "rust-reviewer", "review"), "sub-new")
+  -- a nil before-set is tolerated (fresh session list): read as empty
+  lu.assertEquals(Permissions.diff_new_task(
+      { { id = "sub-7", plugin = "project/init.lua", name = "r:review" } },
+      nil, "r", "review"), "sub-7")
+end
+
+function TestPermissions:test_diff_new_task_misses_wrong_kind_name_known_or_foreign_ids()
+  local tasks = { { id = "sub-1", plugin = "project/init.lua", name = "rust-reviewer:review" } }
+  -- wrong specialist name / wrong kind: the session we opened is not this
+  -- entry, so answering with its id would mis-attribute the session.
+  lu.assertEquals(Permissions.diff_new_task(tasks, {}, "other", "review"), nil)
+  lu.assertEquals(Permissions.diff_new_task(tasks, {}, "rust-reviewer", "task"), nil)
+  -- the id predates this opening: it is in the before-snapshot
+  lu.assertEquals(Permissions.diff_new_task(tasks, { ["sub-1"] = true }, "rust-reviewer", "review"), nil)
+  -- the id is already attributed to a tracked session: never handed out twice
+  Permissions.track("sub-1", { name = "rust-reviewer", kind = "review" })
+  lu.assertEquals(Permissions.diff_new_task(tasks, {}, "rust-reviewer", "review"), nil)
+  Permissions.untrack("sub-1")
+  -- not one of our plugins: the entry belongs to another plugin's subagent
+  lu.assertEquals(Permissions.diff_new_task(
+      { { id = "sub-2", plugin = "not-specialist-subagents-x", name = "rust-reviewer:review" } },
+      {}, "rust-reviewer", "review"), nil)
+  lu.assertEquals(Permissions.diff_new_task(
+      { { id = "sub-2", plugin = "specialist-subagents", name = "no-kind" } },
+      {}, "rust-reviewer", "review"), nil)
+end
+
+function TestPermissions:test_diff_new_task_skips_malformed_entries_and_bad_args()
+  -- maki.task.list output is host-shaped data: garbage entries must never
+  -- raise, and none may be mistaken for a fresh session of ours.
+  local bad = {
+    42,
+    "a string",
+    {},
+    { id = 42, plugin = "project/init.lua", name = "x:review" },
+    { id = "", plugin = "project/init.lua", name = "x:review" },
+    { plugin = "project/init.lua", name = "x:review" },
+    { id = "k1", name = "x:review" },
+    { id = "k2", plugin = "project/init.lua", name = "x:garbage" },
+  }
+  lu.assertEquals(Permissions.diff_new_task(bad, {}, "x", "review"), nil)
+  -- a non-table tasks argument is refused outright
+  lu.assertEquals(Permissions.diff_new_task(nil, {}, "x", "review"), nil)
+  lu.assertEquals(Permissions.diff_new_task("tasks", nil, "x", "review"), nil)
+  lu.assertEquals(Permissions.diff_new_task(42, {}, "x", "review"), nil)
+end
+
+function TestPermissions:test_task_id_for_reads_the_host_task_list_or_returns_nil()
+  -- Host-bound wrapper around diff_new_task (no track side effect): nil
+  -- without a host, the pure diff result with a minimal global maki stub,
+  -- per the _G.maki stub convention used across the suite.
+  lu.assertEquals(Permissions.task_id_for(nil, {}, "r", "review"), nil, "no host: nil")
+  local tasks = { { id = "sub-9", plugin = "project/init.lua", name = "r:review" } }
+  _G.maki = { task = { list = function() return tasks end } }
+  local ok, err = pcall(function()
+    lu.assertEquals(Permissions.task_id_for(nil, { ["sub-old"] = true }, "r", "review"), "sub-9")
+    lu.assertEquals(Permissions.tracked("sub-9"), nil, "task_id_for does not track")
+    -- a raising task.list is absorbed: no id, not an error
+    _G.maki.task.list = function() error("host boom") end
+    lu.assertEquals(Permissions.task_id_for(nil, {}, "r", "review"), nil)
+  end)
+  _G.maki = nil
+  if not ok then
+    error(err)
+  end
+end
+
 return TestPermissions

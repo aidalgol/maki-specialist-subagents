@@ -12,7 +12,11 @@
 --   tool_usage hint    (prompt hint) catalog + delegation guidance
 --   permission.prompt  (slot layer) relays specialist sub permission prompts
 --                      to the user (see lua/specialist_subagents/permissions.lua)
+--   agent.compact.before (slot layer) defers an automatic compaction once
+--                      while the session's specialist dispatches are running
+--                      (see lua/specialist_subagents/compact.lua)
 
+local Compact = require("specialist_subagents.compact")
 local Config = require("specialist_subagents.config")
 local Dispatch = require("specialist_subagents.dispatch")
 local Permissions = require("specialist_subagents.permissions")
@@ -252,5 +256,9 @@ maki.api.register_prompt_hint({
 -- contract set_slot may also be called before the host slot fires. install()
 -- is idempotent and a no-op when permission_relay is disabled.
 Permissions.install()
+
+-- The compact-defer layer: same idempotent pattern, no-op when defer_compact
+-- is disabled (Compact.install re-checks the config on every call too).
+Compact.install()
 
 return M

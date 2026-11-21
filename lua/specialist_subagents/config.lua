@@ -51,6 +51,15 @@ local M = {
   -- lives in maki.async.spawn, which outlives the tool call — hence the
   -- kill switch.
   allow_background = true,
+  -- agent.compact.before layer: defer an automatic compaction of the parent
+  -- chat session once while specialist dispatches from that session are
+  -- still running, so the model gets a turn to record in-flight dispatch
+  -- state before the summary. Kill switch, like allow_background.
+  defer_compact = true,
+  -- Queue a compaction (reason "requested") on a specialist session after
+  -- action = "message" delivers into it, so its continued run has context
+  -- room. Never targets the parent chat session.
+  compact_specialists = true,
 }
 
 function M.setup(opts)

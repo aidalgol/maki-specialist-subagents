@@ -261,10 +261,22 @@ local function running_row(id, idx)
   return entry and entry.targets[idx] or nil
 end
 
-function M.running_attach(id, idx, sess)
+function M.running_attach(id, idx, sess, task_id, kind)
   local row = running_row(id, idx)
   if row then
     row.sess = sess
+    -- The subagent task id maki.task.list reported for this session, so
+    -- `action = "message"` can fall back to maki.session.notify({task = ...})
+    -- and the session can be compacted (reason "requested"). Nil when the
+    -- host exposes no task list (headless) or attribution failed.
+    row.task_id = type(task_id) == "string" and task_id ~= "" and task_id or nil
+    -- The kind the session actually opened under: the registry row carries
+    -- the raw input kind (nil when the dispatch omitted it), but ownership
+    -- checks against the live task list must compare the defaulted kind the
+    -- session was attributed under ("<specialist>:<kind>").
+    if type(kind) == "string" then
+      row.kind = kind
+    end
   end
 end
 
@@ -317,6 +329,33 @@ function M.match_dispatches(parent_session, dispatch_id)
     return (a.seq or 0) < (b.seq or 0)
   end)
   return out
+end
+
+-- Dispatches of one parent chat session with at least one target still
+-- running, for the agent.compact.before defer layer. Returns (count, ids):
+-- the target count and the dispatch ids carrying them. Nil/absent session id
+-- (headless, unknown session) yields (0, {}): nothing to defer for.
+function M.running_for_session(session_id)
+  local count, ids = 0, {}
+  if type(session_id) ~= "string" then
+    return count, ids
+  end
+  for _, e in pairs(State.running) do
+    if e.parent_session == session_id then
+      local live = 0
+      for _, t in ipairs(e.targets) do
+        if t.status == "running" then
+          live = live + 1
+        end
+      end
+      if live > 0 then
+        count = count + live
+        ids[#ids + 1] = e.id
+      end
+    end
+  end
+  table.sort(ids)
+  return count, ids
 end
 
 local function next_dispatch_id(background)
@@ -1016,13 +1055,18 @@ local function run_target(ctx, target, invoker, call)
   -- Attribute the live session so its permission prompts can be relayed to
   -- the user; untracked on every close path below.
   local session_key = Permissions.track_new(ctx, listed_before, spec.name, kind)
+  -- The same attribution, ungated by permission_relay: the task id drives
+  -- the `action = "message"` notify fallback and the requested compaction,
+  -- both of which work with the relay off.
+  local task_id = session_key
+    or Permissions.task_id_for(ctx, listed_before, spec.name, kind)
 
   -- Publish the live session on the dispatch's registry row so a
   -- `delegate { action = "message" | "stop" }` call can reach it while
   -- `sess:prompt` below is blocked on it. Detached by running_mark on every
   -- terminal status.
   if target._dispatch then
-    M.running_attach(target._dispatch.id, target._dispatch.idx, sess)
+    M.running_attach(target._dispatch.id, target._dispatch.idx, sess, task_id, kind)
   end
 
   -- brief: self-contained task + identity + (reviews) changed files + diff
@@ -1221,6 +1265,84 @@ local function aggregate_text(cwd, targets, results)
   return text, ordered
 end
 
+-- ---------------------------------------------------------------------------
+-- Host helpers for live specialist sessions (all pcall-guarded, best effort:
+-- a hostile or pre-0.7.3 host that lacks the API degrades to "delivered
+-- nothing", never to an error escaping the tool handler)
+-- ---------------------------------------------------------------------------
+
+-- Is this task id a live task entry of OURS, i.e. a sub session this plugin
+-- opened under the expected "<specialist>:<kind>" name? Liveness alone is
+-- not enough: the documented same-name attribution race (two identically
+-- named specialists opening between snapshots) can put a wrong-but-live id
+-- on a registry row, and the fallback must not deliver into another
+-- session. Mirrors the permission relay's ownership re-verification
+-- (Permissions.ours_entry).
+function M.owned_task(task_id, specialist, kind)
+  if type(task_id) ~= "string" or type(specialist) ~= "string"
+    or type(kind) ~= "string" or type(maki) ~= "table"
+    or type(maki.task) ~= "table" then
+    return false
+  end
+  local ok, tasks = pcall(function() return maki.task.list() end)
+  if not ok or type(tasks) ~= "table" then
+    return false
+  end
+  local want = specialist .. ":" .. kind
+  for _, t in ipairs(tasks) do
+    if type(t) == "table" and t.id == task_id then
+      return t.name == want and Permissions.ours_entry(t)
+    end
+  end
+  return false
+end
+
+-- Deliver text to one live specialist subagent via maki.session.notify's
+-- `task` option (wake = true, so the specialist's next run reads it).
+-- input.text has already been validated by action_error; the parent session
+-- id scopes the task lookup to this chat's subagents. notify reports
+-- failure by return value (nil, err), not by raising, so both are checked.
+function M.message_task(parent_session, task_id, text)
+  if type(parent_session) ~= "string" or type(task_id) ~= "string"
+    or type(text) ~= "string" or text == ""
+    or type(maki) ~= "table" or type(maki.session) ~= "table"
+    or type(maki.session.notify) ~= "function" then
+    return false
+  end
+  local ok, sent = pcall(maki.session.notify, text, {
+    session = parent_session,
+    task = task_id,
+    wake = true,
+  })
+  return ok and sent == true
+end
+
+-- Queue a compaction (reason "requested") on one live specialist subagent,
+-- so its continued run has context room. Specialist sessions only: the
+-- parent chat session is never a target here — compacting it is the user's
+-- business (maki grants at most one requested compaction at a time; a
+-- second call fails until the first is taken, which pcall absorbs).
+--
+-- This is the only request point: specialist sessions are one-shot here
+-- (run_target prompts once and closes), so the fan-out has no internal step
+-- boundary a compaction could be queued at — the session's continued run
+-- after `action = "message"` is the one place it outlives a single prompt.
+function M.request_compact(parent_session, task_id)
+  if not Config.compact_specialists then
+    return false
+  end
+  if type(parent_session) ~= "string" or type(task_id) ~= "string"
+    or type(maki) ~= "table" or type(maki.session) ~= "table"
+    or type(maki.session.request_compact) ~= "function" then
+    return false
+  end
+  local ok, queued = pcall(maki.session.request_compact, {
+    session = parent_session,
+    task = task_id,
+  })
+  return ok and queued == true
+end
+
 -- `action = "status" | "message" | "stop"`: query or reach the specialists
 -- of in-flight dispatches. Main-only for message/stop (action_error).
 function M.handle_action(ctx, input, invoker)
@@ -1249,7 +1371,26 @@ function M.handle_action(ctx, input, invoker)
       elseif action == "message" then
         local ok_call, sent, serr = pcall(tgt.sess.send, tgt.sess, input.text)
         row.ok = ok_call and sent == true
-        row.detail = row.ok and "queued" or tostring(serr or "send failed")
+        if row.ok then
+          row.detail = "queued"
+        elseif tgt.task_id and M.owned_task(tgt.task_id, tgt.specialist, tgt.kind)
+          and M.message_task(parent_session, tgt.task_id, input.text) then
+          -- sess:send failed but the specialist's task is still live and
+          -- verifiably ours: deliver through maki.session.notify's task
+          -- path instead, so the text is not silently dropped.
+          -- input.text is already validated by action_error; ownership is
+          -- re-verified against the live task list, so the documented
+          -- same-name attribution race cannot deliver into another session.
+          row.ok = true
+          row.detail = "send failed; queued via task notify"
+        else
+          row.detail = tostring(serr or "send failed")
+        end
+        if row.ok and tgt.task_id then
+          -- the specialist's continued run has more to read: give it
+          -- context room (best effort; a second queued request is absorbed)
+          M.request_compact(parent_session, tgt.task_id)
+        end
       else -- stop
         local ok_call = pcall(tgt.sess.close, tgt.sess)
         row.ok = ok_call

@@ -63,7 +63,7 @@ requirements:
   ("Testing").
 - Never edit anything under `external/` — vendored submodules. The
   writing-style skill is symlinked in via `.agents/`.
-- The plugin targets Maki >= 0.7.0 and holds `agent`, `fs_read`, `fs_write`,
+- The plugin targets Maki >= 0.7.3 and holds `agent`, `fs_read`, `fs_write`,
   `run`, `net`, `session_read`, `session_write` only; it registers no
   permission rules and no pre-approvals. Keep it that way; narrowing
   grants is fine, widening never.

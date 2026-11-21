@@ -231,15 +231,33 @@ dispatch synchronously.
 While a dispatch runs, `action` operates on its specialists instead of
 dispatching new work:
 
-| `action`  | Effect                                                                                                                                                          |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`  | List the in-flight dispatches from this session: ids, elapsed time, and per-specialist state. Read-only, allowed from any invoker.                              |
-| `message` | Queue `text` to each matched specialist's live session via `Session:send`; it lands at the sub's next turn boundary as an interrupt from its parent. Main-only. |
-| `stop`    | Close each matched live session, so its blocked prompt returns as cancelled and the normal failure path releases claims and in-flight ledger keys. Main-only.   |
+| `action`  | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`  | List the in-flight dispatches from this session: ids, elapsed time, and per-specialist state. Read-only, allowed from any invoker.                                                                                                                                                                                                                                                                                                                                            |
+| `message` | Queue `text` to each matched specialist's live session via `Session:send`; it lands at the sub's next turn boundary as an interrupt from its parent. If that send fails while the specialist's task is still live, the text is retried through `maki.session.notify`'s `task` path instead, and the result row says which path delivered. Either way, a compaction is queued (reason `requested`) on the specialist session so its continued run has context room. Main-only. |
+| `stop`    | Close each matched live session, so its blocked prompt returns as cancelled and the normal failure path releases claims and in-flight ledger keys. Main-only.                                                                                                                                                                                                                                                                                                                 |
 
 The `dispatch` option targets one dispatch by id (from a receipt). Without
 it, the action applies to every in-flight dispatch opened from this session;
 an explicit id from another session does not match.
+
+### Compaction around specialist dispatches
+
+Two behaviours keep compaction from interfering with delegation (both can
+be disabled; see [Configuration](#configuration)):
+
+- **Deferring an automatic compaction.** While dispatches opened from a session are
+  still running, an `agent.compact.before` layer defers an automatic
+  compaction of that session by one turn: the model gets a turn to record
+  the in-flight dispatch ids before the summary replaces the history. maki
+  grants at most one such defer between two compactions, ignores `defer`
+  for manual, overflow, and requested compactions, and cannot skip an
+  overflow at all. The defer text carries dispatch counts and ids only,
+  never model or user text.
+- **Requesting compaction on specialists.** After `action = "message"`
+  delivers text into a live specialist session, a compaction is queued on
+  that specialist session (reason `requested`). The parent chat session is
+  never compacted by the plugin; compacting it stays the user's business.
 
 ## The `AGENTS.md` gate recipe
 
@@ -331,9 +349,12 @@ can be handed the native `webfetch`/`websearch` tools and the permission relay
 can see their prompts; the plugin itself makes no network calls and records no
 permission rules. The plugin never widens anyone's authority: no pre-approvals,
 no private execution channels, and no calls to `register_permission_rule`
-or `set_prompt`. The one seam it wraps is maki's `permission.prompt` slot,
-described below: it answers prompts in the user's name, it never bypasses
-a deny.
+or `set_prompt`. The seams it wraps are maki's `permission.prompt` slot
+(described below: it answers prompts in the user's name; it never bypasses
+a deny) and the `agent.compact.before` slot (see
+[Compaction around specialist dispatches](#compaction-around-specialist-dispatches):
+it can defer one automatic compaction by one turn; it never skips a
+manual, requested, or overflow compaction).
 
 Sub sessions cannot answer permission prompts, so by default a call that
 would prompt is denied. Two mechanisms fill that gap:
@@ -396,6 +417,10 @@ require("specialist_subagents").setup({
   ledger_cap = 500,        -- persisted review ledger entries per project
   permission_relay = true, -- show specialist permission prompts in the parent UI
   allow_background = true, -- allow background delegate calls (receipt now, report as a message)
+  defer_compact = true,    -- defer an automatic compaction once while this session's
+                           -- specialist dispatches are running (agent.compact.before layer)
+  compact_specialists = true, -- queue a compaction on a specialist session after
+                              -- action = "message" delivers into it
 })
 ```
 
@@ -471,10 +496,18 @@ manual testing.
    while `delegate` is absent; fix the definition, `/reload`, and confirm the
    tool registers again. A definition that only warns (a `model.tier` next to
    a `model.spec`, or an unknown key) still loads the plugin.
-10. In a non-YOLO session, trigger a specialist permission relay window;
+10. With a background dispatch running, force an automatic compaction of the
+    parent chat session (for example by padding the context past its
+    threshold). Expect the compaction to be deferred once, with a save-turn
+    message naming the running dispatch ids, and the compaction to resume on
+    the next turn. With `defer_compact = false`, expect no defer.
+11. Use `action = "message"` on a running specialist whose context is large;
+    confirm the specialist compacts (reason `requested`) before its continued
+    run, and that the parent chat session is never compacted this way.
+12. In a non-YOLO session, trigger a specialist permission relay window;
     confirm the status bar shows the y/s/n hints, and that they clear on
     both an answer and the 55 s timeout.
-11. With `strict_claims = true`, dispatch two same-specialist task targets
+13. With `strict_claims = true`, dispatch two same-specialist task targets
     with overlapping claims in one fan-out — expect neither a warning nor a
     refusal — and confirm a foreground task still refuses against a
     still-running background dispatch with overlapping claims.

@@ -17,6 +17,7 @@ local luaunit = require("luaunit")
 luaunit.setVerbosity(luaunit.VERBOSITY_VERBOSE)
 local runner = luaunit.LuaUnit.new()
 runner:runSuiteByInstances({
+  { "TestCompact", require("compact_spec") },
   { "TestCompat", require("compat_spec") },
   { "TestConfig", require("config_spec") },
   { "TestDispatch", require("dispatch_spec") },

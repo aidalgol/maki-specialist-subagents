@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-min_maki_version = "0.7.0"
+min_maki_version = "0.7.3"
 
 [permissions]
 agent = true
@@ -19,5 +19,7 @@ net = true
 input = false
 # The permission.prompt relay layer sees each call, so it needs the session
 # permissions plus the tool's own capability (run / fs_write / net, held).
+# The agent.compact.before defer layer needs agent + session_read +
+# session_write, all held.
 session_read = true
 session_write = true

@@ -271,6 +271,41 @@ function M.snapshot_ids(ctx)
   return ids
 end
 
+-- Find in a maki.task.list the task entry that appeared for a session just
+-- opened with name "name:kind" and was not in `before`. Pure diff over the
+-- list; callers pcall-guard the listing themselves (see task_id_for).
+-- Returns the task id, or nil.
+function M.diff_new_task(tasks, before, name, kind)
+  before = type(before) == "table" and before or {}
+  if type(tasks) ~= "table" then
+    return nil
+  end
+  local want = tostring(name) .. ":" .. tostring(kind)
+  for _, t in ipairs(tasks) do
+    if type(t) == "table" and type(t.id) == "string" and t.id ~= ""
+      and not before[t.id] and not tracked[t.id]
+      and t.name == want and M.ours_entry(t) then
+      return t.id
+    end
+  end
+  return nil
+end
+
+-- The same diff as track_new, without the permission_relay gate and without
+-- tracking: the id also drives the action = "message" notify fallback and
+-- the requested compaction, which work with the relay off. Returns the task
+-- id, or nil when maki.task.list is unavailable or attribution failed.
+function M.task_id_for(ctx, before, name, kind)
+  if type(maki) ~= "table" or type(maki.task) ~= "table" then
+    return nil
+  end
+  local ok, tasks = pcall(function() return maki.task.list() end)
+  if not ok then
+    return nil
+  end
+  return M.diff_new_task(tasks, before, name, kind)
+end
+
 -- Register the session just opened by diffing maki.task.list against
 -- `before`. Task entries carry the sub session's id and the opening plugin's
 -- name, so the diff attributes the new task even when identically named
@@ -282,24 +317,19 @@ function M.track_new(ctx, before, name, kind)
   if not Config.permission_relay then
     return nil
   end
-  before = type(before) == "table" and before or {}
   if type(maki) ~= "table" or type(maki.task) ~= "table" then
     return nil
   end
   local ok, tasks = pcall(function() return maki.task.list() end)
-  if not ok or type(tasks) ~= "table" then
+  if not ok then
     return nil
   end
-  local want = tostring(name) .. ":" .. tostring(kind)
-  for _, t in ipairs(tasks) do
-    if type(t) == "table" and type(t.id) == "string" and t.id ~= ""
-      and not before[t.id] and not tracked[t.id]
-      and t.name == want and M.ours_entry(t) then
-      M.track(t.id, { name = name, kind = kind })
-      return t.id
-    end
+  local id = M.diff_new_task(tasks, before, name, kind)
+  if not id then
+    return nil
   end
-  return nil
+  M.track(id, { name = name, kind = kind })
+  return id
 end
 
 -- ---------------------------------------------------------------------------

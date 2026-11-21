@@ -872,4 +872,296 @@ function TestDispatch:test_normalize_input_ignores_background_and_action_keys()
   lu.assertEquals(targets[1].background, nil, "background is not a per-target field")
 end
 
+function TestDispatch:test_running_attach_stores_only_a_nonempty_string_task_id()
+  -- row.task_id drives the action = "message" notify fallback and the
+  -- requested compaction; a value that is not a non-empty string must never
+  -- pose as one, or it would become a bogus host task lookup key.
+  local entry = Dispatch.running_register("d-900", "sess-TID", false, {
+    { specialist = "r1", kind = "review" },
+  })
+  Dispatch.running_attach("d-900", 1, { fake = "sess" }, "task-42")
+  lu.assertEquals(entry.targets[1].sess.fake, "sess")
+  lu.assertEquals(entry.targets[1].task_id, "task-42")
+
+  for _, bad in ipairs({ 42, "", nil, { "task-42" } }) do
+    Dispatch.running_attach("d-900", 1, { fake = "sess" }, bad)
+    lu.assertEquals(entry.targets[1].task_id, nil,
+      "task_id " .. tostring(bad) .. " is dropped, not stored")
+  end
+
+  -- the resolved kind (the kind the session actually opened under, defaulted
+  -- from the specialist type) replaces the row's raw input kind, which is
+  -- nil for kind-omitting dispatches; a non-string never overwrites
+  local entry2 = Dispatch.running_register("d-901", "sess-TID", false, {
+    { specialist = "r2", kind = nil },
+  })
+  lu.assertEquals(entry2.targets[1].kind, nil, "raw kind starts nil")
+  Dispatch.running_attach("d-901", 1, { fake = "sess" }, "task-43", "review")
+  lu.assertEquals(entry2.targets[1].kind, "review",
+    "attach records the resolved kind for ownership checks")
+  Dispatch.running_attach("d-901", 1, { fake = "sess" }, nil, 42)
+  lu.assertEquals(entry2.targets[1].kind, "review", "non-string kind is ignored")
+  Dispatch.running_pop("d-901")
+
+  -- attaching to an unknown dispatch or index is a no-op, never a raise
+  Dispatch.running_attach("d-999", 1, { fake = "x" }, "task-42")
+  Dispatch.running_attach("d-900", 9, { fake = "x" }, "task-42")
+  Dispatch.running_pop("d-900")
+end
+
+function TestDispatch:test_running_for_session_counts_running_targets_and_collects_sorted_ids()
+  -- The agent.compact.before defer layer's input: (count, ids) for one
+  -- parent chat session. Counts live targets, not entries — a dispatch
+  -- with two specialists still running contributes 2.
+  Dispatch.running_register("bg-31", "sess-D1", true, {
+    { specialist = "r", kind = "review" },
+    { specialist = "t", kind = "task" },
+  })
+  Dispatch.running_register("d-12", "sess-D1", false, { { specialist = "x", kind = "review" } })
+  Dispatch.running_register("bg-30", "sess-D2", true, { { specialist = "y", kind = "review" } })
+
+  local count, ids = Dispatch.running_for_session("sess-D1")
+  lu.assertEquals(count, 3, "two targets of bg-31 plus one of d-12")
+  lu.assertEquals(ids, { "bg-31", "d-12" }, "ids sorted, other sessions excluded")
+  count, ids = Dispatch.running_for_session("sess-D2")
+  lu.assertEquals(count, 1)
+  lu.assertEquals(ids, { "bg-30" })
+
+  -- non-string session ids (headless host, unknown session): nothing to
+  -- defer for, and never an error
+  for _, sid in ipairs({ nil, 42, {}, true }) do
+    count, ids = Dispatch.running_for_session(sid)
+    lu.assertEquals(count, 0, "session id " .. tostring(sid) .. " counts nothing")
+    lu.assertEquals(ids, {})
+  end
+
+  -- marking one target of bg-31 done: one live target still counts
+  Dispatch.running_mark("bg-31", 1, "done")
+  count, ids = Dispatch.running_for_session("sess-D1")
+  lu.assertEquals(count, 2)
+  lu.assertEquals(ids, { "bg-31", "d-12" }, "the entry survives while a target runs")
+  -- last target done: the entry is dropped and contributes nothing
+  Dispatch.running_mark("bg-31", 2, "done")
+  count, ids = Dispatch.running_for_session("sess-D1")
+  lu.assertEquals(count, 1)
+  lu.assertEquals(ids, { "d-12" })
+  -- an entry whose every target is terminal (injected directly, as
+  -- running_mark would have dropped it) contributes nothing either
+  Dispatch._state.running["d-13"] = {
+    id = "d-13", parent_session = "sess-D1", targets = { { status = "done" } },
+  }
+  count, ids = Dispatch.running_for_session("sess-D1")
+  lu.assertEquals(count, 1, "a finished entry adds no live targets")
+  lu.assertEquals(ids, { "d-12" }, "a finished entry contributes no id")
+  Dispatch._state.running["d-13"] = nil
+  -- and popping the live dispatch empties the result
+  Dispatch.running_pop("d-12")
+  count, ids = Dispatch.running_for_session("sess-D1")
+  lu.assertEquals(count, 0)
+  lu.assertEquals(ids, {})
+  Dispatch.running_pop("bg-30")
+end
+
+-- The host-bound helpers (owned_task, message_task, request_compact) must
+-- degrade to "delivered nothing", never raise, on a hostless (spec)
+-- environment or a pre-0.7.3 host lacking the APIs.
+function TestDispatch:test_host_helper_guards_are_all_false_without_a_host()
+  lu.assertEquals(_G.maki, nil, "precondition: no host global is set")
+  local ok, err = pcall(function()
+    lu.assertEquals(Dispatch.owned_task("t-1", "r", "review"), false)
+    lu.assertEquals(Dispatch.owned_task(nil, "r", "review"), false)
+    lu.assertEquals(Dispatch.owned_task(42, "r", "review"), false)
+    lu.assertEquals(Dispatch.owned_task("t-1", nil, "review"), false)
+    lu.assertEquals(Dispatch.message_task("sess", "t-1", "hi"), false)
+    lu.assertEquals(Dispatch.message_task(nil, "t-1", "hi"), false)
+    lu.assertEquals(Dispatch.message_task("sess", nil, "hi"), false)
+    lu.assertEquals(Dispatch.message_task("sess", "t-1", ""), false, "empty text refused")
+    lu.assertEquals(Dispatch.message_task("sess", "t-1", nil), false)
+    lu.assertEquals(Dispatch.request_compact("sess", "t-1"), false)
+    lu.assertEquals(Dispatch.request_compact(nil, "t-1"), false)
+    lu.assertEquals(Dispatch.request_compact("sess", nil), false)
+  end)
+  lu.assertTrue(ok, "guards never raise: " .. tostring(err))
+end
+
+function TestDispatch:test_owned_task_matches_id_name_and_ownership_with_a_stubbed_host()
+  _G.maki = {
+    task = {
+      list = function()
+        -- malformed list entries must not break the scan; only our own
+        -- plugin's sub sessions under the expected "<spec>:<kind>" name
+        -- count as owned
+        return {
+          { id = "t-1", name = "r:review", plugin = "specialist-subagents" },
+          { id = "t-2", name = "r:review", plugin = "project/init.lua" },
+          { id = "t-3", name = "other:review", plugin = "specialist-subagents" },
+          { id = "t-4", name = "r:task", plugin = "specialist-subagents" },
+          "garbage", { id = 42 }, {},
+        }
+      end,
+    },
+  }
+  local ok, err = pcall(function()
+    lu.assertEquals(Dispatch.owned_task("t-1", "r", "review"), true)
+    lu.assertEquals(Dispatch.owned_task("t-2", "r", "review"), true,
+      "config-dir plugins load under \"<dir>/init.lua\" names too")
+    lu.assertEquals(Dispatch.owned_task("t-3", "r", "review"), false,
+      "same id shape, wrong specialist name: not ours")
+    lu.assertEquals(Dispatch.owned_task("t-4", "r", "review"), false,
+      "same specialist, wrong kind: not ours")
+    lu.assertEquals(Dispatch.owned_task("t-5", "r", "review"), false)
+    lu.assertEquals(Dispatch.owned_task(42, "r", "review"), false)
+    -- a raising task.list is absorbed, never surfaces
+    _G.maki.task.list = function() error("host boom") end
+    lu.assertEquals(Dispatch.owned_task("t-1", "r", "review"), false)
+    -- a non-table list result reads as "not owned"
+    _G.maki.task.list = function() return "garbage" end
+    lu.assertEquals(Dispatch.owned_task("t-1", "r", "review"), false)
+  end)
+  _G.maki = nil
+  if not ok then
+    error(err)
+  end
+end
+
+function TestDispatch:test_message_task_passes_task_scoped_options_with_a_stubbed_host()
+  local notified = {}
+  _G.maki = {
+    session = {
+      notify = function(text, opts)
+        notified[#notified + 1] = { text, opts }
+        return true, nil
+      end,
+    },
+  }
+  local ok, err = pcall(function()
+    lu.assertEquals(Dispatch.message_task("sess", "t-1", "hi"), true)
+    lu.assertEquals(#notified, 1)
+    lu.assertEquals(notified[1][1], "hi")
+    lu.assertEquals(notified[1][2], { session = "sess", task = "t-1", wake = true },
+      "wake = true so the specialist's next run reads the message")
+    -- a raising notify is absorbed: failed delivery, not a raise
+    _G.maki.session.notify = function() error("host boom") end
+    lu.assertEquals(Dispatch.message_task("sess", "t-1", "hi"), false)
+    -- notify reports failure by return value (nil, err), not by raising:
+    -- that is a failed delivery too, never a reported success
+    _G.maki.session.notify = function() return nil, "no such task" end
+    lu.assertEquals(Dispatch.message_task("sess", "t-1", "hi"), false)
+  end)
+  _G.maki = nil
+  if not ok then
+    error(err)
+  end
+end
+
+function TestDispatch:test_request_compact_config_gates_before_the_host_with_a_stubbed_host()
+  -- compact_specialists = false must refuse before any host call: the gate
+  -- is the first branch, so a disabled config costs nothing on the host.
+  local Config = require("specialist_subagents.config")
+  local compacted = {}
+  _G.maki = {
+    session = {
+      request_compact = function(opts)
+        compacted[#compacted + 1] = opts
+        return true, nil
+      end,
+    },
+  }
+  local saved = Config.compact_specialists
+  local ok, err = pcall(function()
+    Config.compact_specialists = false
+    lu.assertEquals(Dispatch.request_compact("sess", "t-1"), false)
+    lu.assertEquals(#compacted, 0, "the gate fires before the host call")
+    Config.compact_specialists = true
+    lu.assertEquals(Dispatch.request_compact("sess", "t-1"), true)
+    lu.assertEquals(compacted, { { session = "sess", task = "t-1" } })
+    -- a raising host call is absorbed, never surfaces
+    _G.maki.session.request_compact = function() error("host boom") end
+    lu.assertEquals(Dispatch.request_compact("sess", "t-1"), false)
+    -- a nil, err return (the documented second-request refusal) is a
+    -- failed queueing, not a success
+    _G.maki.session.request_compact = function() return nil, "already queued" end
+    lu.assertEquals(Dispatch.request_compact("sess", "t-1"), false)
+  end)
+  Config.compact_specialists = saved
+  _G.maki = nil
+  if not ok then
+    error(err)
+  end
+end
+
+function TestDispatch:test_handle_action_message_send_failure_falls_back_to_task_notify()
+  -- End-to-end over the message path with a minimal global maki stub:
+  -- sess:send fails, the target's task is alive, so the text goes out via
+  -- maki.session.notify's task option, the row reports the fallback, both
+  -- targets get a compaction queued for their continued runs, and the
+  -- well-behaved sibling never goes through the fallback.
+  local main = { name = "main", chain = {} }
+  local ctx = { session_id = function() return "sess-ACT" end }
+  Dispatch.running_register("bg-90", "sess-ACT", true, {
+    { specialist = "r1", kind = "review" },
+    { specialist = "r2", kind = "task" },
+  })
+  local sent, notified, compacted = {}, {}, {}
+  local failing = {
+    send = function(_, text)
+      sent[#sent + 1] = { "failing", text }
+      return false, "peer closed"
+    end,
+    close = function() end,
+  }
+  local working = {
+    send = function(_, text)
+      sent[#sent + 1] = { "working", text }
+      return true
+    end,
+    close = function() end,
+  }
+  Dispatch.running_attach("bg-90", 1, failing, "task-1")
+  Dispatch.running_attach("bg-90", 2, working, "task-2")
+  _G.maki = {
+    task = {
+      list = function()
+        -- ownership-shaped entries: the fallback re-verifies that the row's
+        -- task id is a live task of ours under "<specialist>:<kind>"
+        return {
+          { id = "task-1", name = "r1:review", plugin = "specialist-subagents" },
+          { id = "task-2", name = "r2:task", plugin = "specialist-subagents" },
+        }
+      end,
+    },
+    session = {
+      notify = function(text, opts)
+        notified[#notified + 1] = { text, opts }
+        return true, nil
+      end,
+      request_compact = function(opts)
+        compacted[#compacted + 1] = opts
+        return true, nil
+      end,
+    },
+  }
+  local out, is_err
+  local ok, e = pcall(function()
+    out, is_err = Dispatch.handle_action(ctx,
+      { action = "message", text = "status?", dispatch = "bg-90" }, main)
+  end)
+  _G.maki = nil
+  Dispatch.running_pop("bg-90")
+  lu.assertTrue(ok, "handle_action runs: " .. tostring(e))
+  lu.assertEquals(is_err, false)
+  lu.assertStrContains(out, "2 delivered, 0 not delivered")
+  lu.assertStrContains(out, "send failed; queued via task notify")
+  lu.assertStrContains(out, "queued")
+  lu.assertEquals(#notified, 1, "only the failing send falls back to notify")
+  lu.assertEquals(notified[1][1], "status?")
+  lu.assertEquals(notified[1][2], { session = "sess-ACT", task = "task-1", wake = true })
+  -- after either successful delivery a compaction was queued for the
+  -- specialist's continued run (fallback first, direct send second)
+  lu.assertEquals(compacted, {
+    { session = "sess-ACT", task = "task-1" },
+    { session = "sess-ACT", task = "task-2" },
+  })
+end
+
 return TestDispatch
