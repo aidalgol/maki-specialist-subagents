@@ -134,6 +134,16 @@ return {
   -- prompt.
   omit_agents_md = true,
 
+  -- Optional. Give the specialist the parent chat's MCP servers' tools.
+  -- Default false; valid for both types. Maki injects their definitions each
+  -- turn (deferred behind `tool_search`), so do not list MCP tools in `tools`.
+  -- Cost caveat: on a chat with MCP servers, the session prices at every
+  -- plugin permission except `agent` and `input`, so the plugin must hold
+  -- them (it holds `env` and `session_settings` for this reason). On a chat
+  -- without MCP servers it costs nothing. If the plugin cannot pay, dispatch
+  -- fails with the host's permission error naming the shortfall.
+  mcp = true,
+
   -- Optional. Skills for this specialist to always load. Valid for both
   -- types.
   skills = { "maki-plugin-dev" },
@@ -343,10 +353,13 @@ specialist work. Keep these points in mind:
 ## Permissions guidance
 
 `plugin.toml` grants exactly `agent`, `fs_read`, `fs_write`, `run`, `net`,
-`session_read`, and `session_write`; it does not grant `env`. `net` exists
-only so specialists can be handed the native `webfetch`/`websearch` tools
-and the permission relay can see their prompts; the plugin itself makes no
-network calls and records no permission rules. The plugin never widens
+`session_read`, `session_write`, `env`, and `session_settings`; it denies
+`input`. `net` exists only so specialists can be handed the native
+`webfetch`/`websearch` tools and the permission relay can see their prompts;
+the plugin itself makes no network calls and records no permission rules.
+`env` and `session_settings` exist only so a `mcp = true` specialist can pay
+the host's MCP hand-over pricing on a chat with MCP servers; the plugin makes
+no `env` reads and no `session_settings` API calls. The plugin never widens
 anyone's authority: no pre-approvals, no private execution channels, and no
 calls to `register_permission_rule`
 or `set_prompt`. The plugin wraps two maki slots. The `permission.prompt`

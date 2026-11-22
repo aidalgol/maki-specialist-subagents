@@ -28,6 +28,7 @@ function TestSpec:test_validate_minimal_review_definition_passes_with_defaults()
   lu.assertEquals(norm.name, "sample-reviewer")
   lu.assertEquals(norm.instructions, "sample-reviewer.md")
   lu.assertEquals(norm.omit_agents_md, false)
+  lu.assertEquals(norm.mcp, false)
   lu.assertEquals(norm.delegate, nil)
   lu.assertEquals(norm.review.files, {})
   lu.assertEquals(norm.skills, {})
@@ -84,6 +85,16 @@ function TestSpec:test_validate_thinking_levels()
   lu.assertEquals(Spec.validate(minimal({ thinking = "low" })).thinking, "low")
   lu.assertEquals(Spec.validate(minimal({ thinking = 2048 })).thinking, 2048)
   lu.assertEquals(Spec.validate(minimal({ thinking = "sideways" })), nil)
+end
+
+function TestSpec:test_validate_mcp_optional_boolean()
+  lu.assertEquals(Spec.validate(minimal({ mcp = true })).mcp, true)
+  lu.assertEquals(Spec.validate(minimal({ mcp = false })).mcp, false)
+  for _, bad in ipairs({ "true", 1 }) do
+    local norm, err = Spec.validate(minimal({ mcp = bad }))
+    lu.assertEquals(norm, nil, "mcp " .. tostring(bad) .. " must fail")
+    lu.assertStrContains(err, "mcp must be a boolean")
+  end
 end
 
 function TestSpec:test_validate_tools_only_except()

@@ -35,7 +35,7 @@ end
 local TOP_LEVEL_KEYS = {
   name = true, type = true, description = true, instructions = true,
   model = true, thinking = true, tools = true, review = true, delegate = true,
-  max_iterations = true, omit_agents_md = true, skills = true,
+  max_iterations = true, omit_agents_md = true, skills = true, mcp = true,
 }
 local MODEL_KEYS = { tier = true, spec = true }
 local TOOLS_KEYS = { only = true, except = true }
@@ -82,9 +82,16 @@ function M.validate(def)
     instructions = type(def.instructions) == "string" and #def.instructions > 0
       and def.instructions or (def.name .. ".md"),
     omit_agents_md = def.omit_agents_md == true,
+    mcp = def.mcp == true,
     skills = {},
     review = { files = {} },
   }
+
+  -- mcp is rejected rather than coerced when it is not a boolean, so a typo
+  -- such as mcp = "true" fails loudly.
+  if def.mcp ~= nil and type(def.mcp) ~= "boolean" then
+    return fail("mcp must be a boolean")
+  end
 
   -- model = { tier = ... } or { spec = ... }; tier clamps to the parent at
   -- resolve time, spec pins one model.

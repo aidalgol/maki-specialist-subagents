@@ -23,3 +23,11 @@ input = false
 # session_write, all held.
 session_read = true
 session_write = true
+# Granted solely so a `mcp = true` specialist can pay the host's hand-over
+# pricing for MCP tools: on a chat with MCP servers, maki prices such a
+# session at every plugin permission except `agent` and `input`. The plugin
+# makes no environment reads and no session_settings API calls; the grants
+# are pricing headroom, matching the `net` rationale above. Narrowing grants
+# is fine; widening further is not.
+env = true
+session_settings = true

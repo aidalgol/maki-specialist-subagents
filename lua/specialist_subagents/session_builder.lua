@@ -332,7 +332,7 @@ function M.open_session(ctx, spec, kind, invocation, cwd, local_tools)
       local_tools = local_tools,
       name = spec.name .. ":" .. kind,
       audience = "general_sub",
-      mcp = false,
+      mcp = spec.mcp == true,
       model_spec = model_spec,
       thinking = spec.thinking,
     })

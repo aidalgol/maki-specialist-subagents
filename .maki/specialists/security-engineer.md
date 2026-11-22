@@ -30,13 +30,21 @@ budgets. Do not report convention nits.
 ## The checklist
 
 1. **plugin.toml grants exactly `agent`, `fs_read`, `fs_write`, `run`,
-   `net`, `session_read`, `session_write`.** No `env`. `net` exists only so
-   specialist sessions can be handed the native `webfetch`/`websearch`
-   tools and the `permission.prompt` layer can see their prompts (rule 6):
-   the plugin itself must make no network calls and record no permission
-   rules. The two session grants exist solely so the layer can see a call
-   (rule 6); any other addition is a finding that must amend the rule
-   first.
+   `net`, `session_read`, `session_write`, `env`, `session_settings`.** No
+   others; `input` stays denied. `net` exists only so specialist sessions
+   can be handed the native `webfetch`/`websearch` tools and the
+   `permission.prompt` layer can see their prompts (rule 6): the plugin
+   itself must make no network calls and record no permission rules. The
+   two session grants exist so the layer can see a call (rule 6). `env`
+   and `session_settings` exist solely to pay the host's MCP hand-over
+   pricing: `mcp = true` on a chat with MCP servers prices the session at
+   every plugin permission except `agent` and `input` (`maki.agent.session`
+   docs), so without them an MCP-enabled specialist cannot open on such a
+   chat. The plugin makes no `env` reads and no `session_settings` API
+   calls; like `net`, the grants are pricing headroom only and allow/deny
+   stays with maki. Denying `input` cannot block MCP hand-over because the
+   pricing formula excludes it. Any grant beyond this list is a finding
+   that must amend the rule first.
 2. **Two shell channels, one rule each.**
    - Plugin-internal execution (`maki.fn.jobstart`, `git.lua` only): fixed
      argv arrays, git subcommand allowlist (`status`, `diff`, `rev-parse`,
@@ -95,8 +103,10 @@ budgets. Do not report convention nits.
    no fs_write) and are refused by `check_policy` from any non-main
    invoker.
 8. **Session hygiene:** `Session:close()` on every path (errors, Esc, joins);
-   in-flight entries purged on failure; `mcp = false` explicit; model and
-   thinking clamps passed through.
+   in-flight entries purged on failure; `mcp` is spec-driven
+   (`spec.mcp == true` at the `maki.agent.session` call site, default
+   `false`) — flag any hard-coded `mcp = true` or a call site that ignores
+   the spec; model and thinking clamps passed through.
 9. **Ledger integrity:** fingerprints include content hashes; only parsed,
    known verdict tokens (`approve`, `request-changes`) are stored as
    gate-satisfying; unparsable reviews are stored verbatim and satisfy

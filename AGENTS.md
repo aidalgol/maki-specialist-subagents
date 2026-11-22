@@ -64,9 +64,11 @@ requirements:
 - Never edit anything under `external/` — vendored submodules. The
   writing-style skill is symlinked in via `.agents/`.
 - The plugin targets Maki >= 0.7.3 and holds `agent`, `fs_read`, `fs_write`,
-  `run`, `net`, `session_read`, `session_write` only; it registers no
-  permission rules and no pre-approvals. Keep it that way; narrowing
-  grants is fine, widening never.
+  `run`, `net`, `session_read`, `session_write`, `env`, `session_settings`
+  only; it registers no permission rules and no pre-approvals. `input`
+  stays denied. `env` and `session_settings` exist only so a `mcp = true`
+  specialist can pay the host's MCP hand-over pricing on chats with MCP
+  servers. Narrowing grants is fine, widening never.
 - `.maki/init.lua` loads the plugin project-locally, so it clashes with a
   globally installed copy — do not rely on global config here.
 - A specialist definition that fails validation blocks the whole plugin,
