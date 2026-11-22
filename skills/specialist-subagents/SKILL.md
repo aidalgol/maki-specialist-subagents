@@ -44,10 +44,10 @@ project-local definition wins and Maki logs a discovery warning.
 
 Each specialist is two files. The directory is the same for both types.
 
-| Files | Location | Naming rule |
-|---|---|---|
-| Lua definition | `.maki/lua/specialists/<stem>.lua` | The stem must be a valid require path: `^[A-Za-z_][A-Za-z0-9_]*$` |
-| Instruction file | `.maki/specialists/<name>.md` | Free-form; the `instructions` field points to it |
+| Files            | Location                           | Naming rule                                                       |
+| ---------------- | ---------------------------------- | ----------------------------------------------------------------- |
+| Lua definition   | `.maki/lua/specialists/<stem>.lua` | The stem must be a valid require path: `^[A-Za-z_][A-Za-z0-9_]*$` |
+| Instruction file | `.maki/specialists/<name>.md`      | Free-form; the `instructions` field points to it                  |
 
 The instruction file defaults to `<name>.md` — the specialist's `name`, not
 the module stem. For example, a module `test_engineer.lua` with
@@ -105,6 +105,17 @@ return {
   -- the specialist's base prompt.
   omit_agents_md = true,
 
+  -- Optional. Give the specialist the parent chat's MCP servers' tools.
+  -- Default false. Valid for both types. Maki injects their definitions
+  -- each turn (deferred behind `tool_search`), so do not list MCP tools in
+  -- `tools`. Cost caveat: on a chat with MCP servers, the session prices at
+  -- every plugin permission except `agent` and `input`, so the plugin must
+  -- hold them; on a chat without MCP servers it costs nothing. If the
+  -- plugin cannot pay, dispatch fails with the host's permission error
+  -- naming the shortfall. A non-boolean value is a fatal validation error,
+  -- not a coercion.
+  mcp = true,
+
   -- Optional. Skills for this specialist to always load. Valid for both
   -- types.
   skills = { "maki-plugin-dev" },
@@ -155,7 +166,7 @@ saves debugging time:
    prevents the plugin from loading everywhere: `delegate` and
    `specialist_reviews` do not register, and Maki logs an error naming each
    broken file and reason. Because global definitions are always read, one
-   broken *global* definition disables the plugin in *every* project.
+   broken _global_ definition disables the plugin in _every_ project.
 2. **Discovery warnings (non-fatal).** Duplicate names, unknown keys, and
    ignored fields. These appear under "Discovery warnings" in the
    `/specialists` command output and in the delegation guidance shown to the
@@ -204,7 +215,9 @@ can live within:
   capped at 50 files per review).
 - **Path claims.** Task dispatches can declare the path globs they will
   touch. Overlapping claims from active siblings warn, or are rejected when
-  `strict_claims` is on.
+  `strict_claims` is on. Overlap within the same dispatch to the same
+  specialist is exempt: one fan-out dispatching the same specialist twice
+  with overlapping claims is a deliberate routing decision, not a conflict.
 - **Budgets.** Defaults: `max_active` 6 concurrent sessions per fan-out,
   `per_turn_budget` 16 dispatches per call, review nesting depth 2, and a
   fix-to-re-review iteration cap of 3. Every budget is enforced in the
@@ -217,9 +230,24 @@ can live within:
 - **Background dispatches.** `background = true` returns a receipt
   immediately; the aggregated report arrives as a message when the fan-out
   completes. Main-only.
+- **In-flight actions.** While a dispatch runs, `action` operates on its
+  specialists instead of dispatching new work: `action = "status"` lists
+  the in-flight dispatches from this session (read-only, allowed from any
+  invoker); `action = "message"` queues text to each matched specialist's
+  live session (main-only; a compaction is queued on the specialist session
+  so its continued run has context room); `action = "stop"` closes matched
+  live sessions so their blocked prompts return as cancelled (main-only).
+  The `dispatch` option targets one dispatch id from a background receipt;
+  without it, the action applies to every in-flight dispatch opened from
+  this session.
 - **Coverage queries.** `specialist_reviews` reports which changed files
-  already have fresh review coverage. Reviews are content-addressed:
-  unchanged content returns the recorded verdict instantly.
+  already have fresh review coverage. Reviews are content-addressed: ledger
+  entries are keyed by the reviewed file's fingerprint and a scope-context
+  hash over the whole reviewed set, so a verdict is reused only when a
+  later dispatch presents the same context: the same files, unchanged. A
+  change to any file in the reviewed set invalidates the other files'
+  verdicts too, because a review is a changeset-level verdict rendered
+  against the whole diff.
 
 ## Verification checklist
 
