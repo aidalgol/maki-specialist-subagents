@@ -113,7 +113,7 @@ return {
   thinking = "low",
 
   -- Optional.
-  -- `only` and `exclude` are mutually exclusive.
+  -- `only` and `except` are mutually exclusive.
   -- Defaults differ depending on the value of `type`. See below.
   tools = {
     -- Explicitly specify tools available to this specialist.
