@@ -9,21 +9,20 @@ SPDX-License-Identifier: MIT
 Maki plugin for defining custom specialist subagents with delegation workflows
 built into the harness: a two-type specialist system, nested delegation, a
 review ledger that deduplicates reviews by file content and review scope, and
-budgets that make deep delegation trees safe. It is inspired by the generic
-agent definitions in other coding agents such as OpenCode, but avoids the
-pitfalls of generic subagent harnesses.
+budgets that bound the cost of deep delegation trees. It is inspired by the
+generic agent definitions in other coding agents such as OpenCode.
 
-## What it gives you
+## What the plugin provides
 
 | Tool / command             | Audience    | Purpose                                                                                                                                                                                                                                |
 | -------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `delegate`                 | main only   | Dispatch specialists: one scalar dispatch, or a `targets` list that fans out in parallel and returns one aggregated report. `background = true` runs the dispatch in the background; `action` queries or reaches in-flight dispatches. |
 | `specialist_reviews`       | main + subs | Read-only ledger query: which changed files have review coverage that is fresh against the current file content and review scope.                                                                                                      |
 | `/specialists`             | user        | Catalog, live invocations, recent coverage.                                                                                                                                                                                            |
-| bundled skill              | main        | `specialist-subagents` skill teaching the agent how to author specialist definitions; see [Bundled skill](#bundled-skill).                                                                                                             |
+| bundled skill              | main        | `specialist-subagents` skill that documents how to author specialist definitions; see [Bundled skill](#bundled-skill).                                                                                                                 |
 | prompt hint (`tool_usage`) | main        | Fresh catalog plus delegation guidance, rebuilt every run.                                                                                                                                                                             |
 
-There is no command that dispatches specialists. You ask the top-level Maki
+No command dispatches specialists. You ask the top-level Maki
 agent to hand off parts of the task to a specialist, for example:
 
 > Have the technical-writer specialist review the uncommitted changes.
@@ -77,13 +76,13 @@ flowchart TD
 
 ## Specialist definitions
 
-A specialist is defined by a Lua module and a markdown instruction file, located under either the project-local `.maki/` directory, or the user's global Maki config directory.
+A specialist is defined by a Lua module and a markdown instruction file, located under either the project-local `.maki/` directory or the user's global Maki config directory.
 
 - Project: `<project>/.maki/lua/specialists/`
 - Global: `~/.config/maki/lua/specialists/`
 
-The basename of the Lua module must be a valid require path, but there is
-no restriction on the markdown file. For example, `test_engineer.lua` +
+The basename of the Lua module must be a valid require path, but nothing
+restricts the markdown file. For example, `test_engineer.lua` +
 `test-engineer.md` would be valid; `test-engineer.lua` + `test-engineer.md`
 would not.
 
@@ -149,18 +148,18 @@ return {
 
   -- Allow the specialist to have any reviewer specialist review its own
   -- changes. Nested delegation exists for this fix<->re-review loop;
-  -- cross-discipline routing is the orchestrator's job, so `kind = "task"`
+  -- cross-discipline routing is the main agent's job, so `kind = "task"`
   -- dispatches from a nested session are refused.
   delegate = { reviews = true },
 }
 ```
 
-An invalid definition prevents the plugin from loading, causing Maki to log an
-error naming each broken file, with a reason. This is to avoid you wasting time
-and tokens in a session with some of your specialists unavailable, when you
-thought they would be used.
+An invalid definition prevents the plugin from loading: Maki logs an error
+naming each broken file, with a reason. Rather than leaving you to discover
+mid-session that specialists you expected would never run, the error tells you
+up front, saving your time and tokens.
 
-Non-fatal issues can still occur and allow the plugin to load, but how you
+Non-fatal issues can still occur; the plugin still loads, but how you
 learn of them depends on the kind of issue.
 
 At load, definition problems such as duplicate specialist names and invalid keys
@@ -170,15 +169,15 @@ written to the log.
 
 At dispatch time, problems with a specialist's environment are logged, such as
 a requested skill or instruction file that cannot be found. These surface only
-in the log, so a specialist may run without its intended instructions if you do
+in the log, so a specialist can run without its intended instructions if you do
 not check.
 
-Because the global specialists definitions are always read, a broken
+Because the global specialist definitions are always read, a broken
 global specialist disables the plugin in every project.
 
 ### Tool defaults
 
-The default tools available to a specialist depends upon the value of the `type`
+The default tools available to a specialist depend on the value of the `type`
 field in the specialist definition.
 
 #### Review
@@ -199,25 +198,25 @@ plugin does not hold:
 - Over-cost containers: `batch`, `code_execution`, and `task`.
 - Capability-less built-ins: `skill`, `todo_write`, `memory`, `view_image`,
   `task_stop`, and `task_message` declare no capability, which prices the
-  session at every permission except `agent` — more than the plugin's grants.
+  session at every permission except `agent` (more than the plugin's grants).
 
 A capability-less tool never stops a session from running: when maki refuses
 to open a session because of a refused tool, the builder retries without it
 and logs a single warning naming everything that was dropped. Note that
 `skills = { ... }` in a specialist definition still works even though `skill`
-is excluded, because skill bodies are injected into the system prompt at
-dispatch time, not loaded by the sub session's own `skill` tool.
+is excluded: skill bodies are injected into the system prompt at dispatch time,
+not loaded by the sub session's own `skill` tool.
 
 ## Background dispatches and in-flight actions
 
 A review fan-out can run long. `background = true` on a `delegate` call (scalar
 or `targets` form) returns a receipt immediately: the dispatch id (`bg-<n>`,
 for example, `bg-3`), the specialists involved, and any targets refused at
-validation. The fan-out then runs in a task that outlives the tool call, and
-when it completes the aggregated report — the same aggregate and review coverage
-audit a synchronous call returns — is delivered to the session as a message (via
-`maki.session.notify` with `wake = true`), so the model's next turn reads it
-without the user doing anything.
+validation. The fan-out then runs in a task that outlives the tool call. When
+it completes, the plugin delivers the aggregated report to the session as a
+message (via `maki.session.notify` with `wake = true`). The report is the same
+aggregate and review coverage audit a synchronous call returns, so the
+model's next turn reads it without the user doing anything.
 
 Do not re-dispatch while a background dispatch runs: the review ledger
 deduplicates unchanged content and joins identical in-flight reviews anyway.
@@ -225,7 +224,7 @@ deduplicates unchanged content and joins identical in-flight reviews anyway.
 Background dispatches are main-only: a nested delegate's call must stay
 synchronous so its result reaches the specialist's own report. They are disabled
 when `allow_background = false`. They are also refused without a task UI (for
-example, under `maki -p`), where there is no session to wake — the error says to
+example, under `maki -p`), which has no session to wake; the error says to
 dispatch synchronously.
 
 While a dispatch runs, `action` operates on its specialists instead of
@@ -261,9 +260,9 @@ be disabled; see [Configuration](#configuration)):
 
 ## The `AGENTS.md` gate recipe
 
-If you want some of your specialists to act as a final review gate — a gate the
-harness verifies for you, not a convention you hope the model follows — put
-the following recipe in your project's `AGENTS.md` (or instructions):
+If you want some of your specialists to act as a final review gate, verified by
+the harness rather than trusted as a convention, put the following recipe in
+your project's `AGENTS.md` (or instructions):
 
 > Before finishing, dispatch the relevant area specialists in one `delegate`
 > `targets` call (your judgment; see `specialist_reviews` for prior
@@ -271,12 +270,12 @@ the following recipe in your project's `AGENTS.md` (or instructions):
 > changed file passing, with no `UNCOVERED` entries. Previously reviewed
 > content returns instantly from the ledger.
 
-The gate rides both the dedup and the audit: the model chooses whom to
+The gate relies on both the dedup and the audit: the model chooses whom to
 invoke, and the harness computes what was missed. A final re-review of
 unchanged content is a cache hit, so the gate costs nothing the earlier
 reviews did not already spend.
 
-## Install
+## Installing the plugin
 
 Global config:
 
@@ -300,8 +299,8 @@ This repository itself also uses the plugin: four specialists under `.maki/`.
 
 ## Bundled skill
 
-This plugin pack includes a `specialist-subagents` skill that teaches an agent
-how to author specialist definitions: the file layout, the complete definition
+This plugin pack includes a `specialist-subagents` skill that documents how
+to author specialist definitions: the file layout, the complete definition
 schema, per-type tool defaults, the failure modes, how to write instruction
 files, and a primer on how `delegate` invokes specialists.
 
@@ -327,7 +326,7 @@ ln -s ~/src/path/to/maki-specialist-subagents/skills/specialist-subagents \
 ```
 
 Whichever method you choose, keep the skill in sync with the installed
-version of the plugin; a stale skill misleads the orchestrator during
+version of the plugin; a stale skill misleads the main agent during
 specialist work. Keep these points in mind:
 
 - A copy is frozen at the revision you copied. Re-run the `cp` after a pack
@@ -344,31 +343,33 @@ specialist work. Keep these points in mind:
 ## Permissions guidance
 
 `plugin.toml` grants exactly `agent`, `fs_read`, `fs_write`, `run`, `net`,
-`session_read`, `session_write` — no `env`. `net` exists only so specialists
-can be handed the native `webfetch`/`websearch` tools and the permission relay
-can see their prompts; the plugin itself makes no network calls and records no
-permission rules. The plugin never widens anyone's authority: no pre-approvals,
-no private execution channels, and no calls to `register_permission_rule`
-or `set_prompt`. The seams it wraps are maki's `permission.prompt` slot
-(described below: it answers prompts in the user's name; it never bypasses
-a deny) and the `agent.compact.before` slot (see
-[Compaction around specialist dispatches](#compaction-around-specialist-dispatches):
-it can defer one automatic compaction by one turn; it never skips a
-manual, requested, or overflow compaction).
+`session_read`, and `session_write`; it does not grant `env`. `net` exists
+only so specialists can be handed the native `webfetch`/`websearch` tools
+and the permission relay can see their prompts; the plugin itself makes no
+network calls and records no permission rules. The plugin never widens
+anyone's authority: no pre-approvals, no private execution channels, and no
+calls to `register_permission_rule`
+or `set_prompt`. The plugin wraps two maki slots. The `permission.prompt`
+slot answers prompts in the user's name and never bypasses a deny. The
+`agent.compact.before` slot (see
+[Compaction around specialist dispatches](#compaction-around-specialist-dispatches))
+can defer one automatic compaction by one turn and never skips a manual,
+requested, or overflow compaction.
 
 Sub sessions cannot answer permission prompts, so by default a call that
 would prompt is denied. Two mechanisms fill that gap:
 
 **Permission relay (default on; `permission_relay = false` disables).** When
-a specialist sub session's call would prompt — maki fires the
-`permission.prompt` slot for subagent calls too — the plugin opens a small
-window next to the chat input in the parent UI: specialist name and kind,
-tool, command/input, and the scopes the prompt asks about. Keys:
+a specialist sub session's call would prompt (maki fires the
+`permission.prompt` slot for subagent calls too), the plugin opens a small
+window next to the chat input in the parent UI. The window shows the
+specialist name and kind, the tool, the command or input, and the scopes
+the prompt asks about. Keys:
 
-- `y` — allow once: the call runs, no model round trip.
-- `s` — allow for this specialist: remembered in memory until the session
+- `y`: allow once, so the call runs with no model round trip.
+- `s`: allow for this specialist, remembered in memory until the session
   closes, so a repeated identical call (same tool, same scopes) runs silent.
-- `n` (or `Esc`) — deny: the sub receives a guidance message and adapts.
+- `n` (or `Esc`): deny, so the sub receives a guidance message and adapts.
 
 While the window is open the status bar shows the `y` / `s` / `n` keys
 (`maki.ui.set_status_hint`), cleared when the window closes or times out.
@@ -378,9 +379,9 @@ under `maki -p`), the call is denied with guidance instead of hanging the
 sub. Verdicts record no rules host-side, so relays never persist: allow-always
 answers live only for the session, and `.maki/permissions.toml` remains the way
 to pre-allow recurring commands. Attribution is re-verified against the live
-task list on every relay, so a closed session's cache dies with it. Calls from
-the main session and from other plugins' subagents pass the layer untouched, and
-deny rules and escalated (`ask`) calls never reach it.
+task list on every relay, so a closed session's cache expires with it. Calls
+from the main session and from other plugins' subagents pass the layer
+untouched, and deny rules and escalated (`ask`) calls never reach it.
 
 The plugin holds `net`, so `webfetch`/`websearch` calls relay like any other
 prompted call: with no project rule, the relay window appears; whether web
@@ -391,10 +392,10 @@ Pre-allow rules cover the rest:
   pre-allowed by maki's builtin `<cwd>/**` rule;
 - add project rules (`.maki/permissions.toml`) for the lint and
   static-analysis commands your review specialists run, for example,
-  `ruff *`, `npm run lint*`, `cargo check *` — cheaper than answering the
-  relay window on every dispatch;
+  `ruff *`, `npm run lint*`, `cargo check *` (cheaper than answering the
+  relay window on every dispatch);
 - to block web tools in a project, add deny rules for `webfetch`/`websearch`
-  (or simply never allow them); to silence the relay for frequent fetches,
+  (or never allow them at all); to silence the relay for frequent fetches,
   pre-allow a rule such as `webfetch *`.
 
 The plugin's own process execution is a fixed git channel only
@@ -429,11 +430,11 @@ cwd)>/ledger.json`. Entries are keyed by the reviewed file's fingerprint and
 the review-time scope context (a hash over every file in the reviewed set).
 A verdict is reused only when a later dispatch presents the same context: the
 same files, unchanged. A change to any file in the scope therefore invalidates
-the verdicts of its siblings too, because the reviewer renders one
-changeset-level verdict against the whole diff. Entries persisted by older
-plugin versions carry no context and never hit. The first review after the
-upgrade therefore re-reviews and re-records. `force_review = true` still
-bypasses the cache explicitly.
+the verdicts of the other files in the reviewed set too, because the reviewer
+renders one changeset-level verdict against the whole diff. Entries persisted
+by older plugin versions carry no context and never hit. The first review
+after the upgrade therefore re-reviews and re-records. `force_review = true`
+still bypasses the cache explicitly.
 
 ## Development
 
@@ -470,14 +471,14 @@ manual testing.
 2. Ask the agent to run `delegate` with `specialist_reviews` first, then a
    review fan-out; confirm parsed verdicts, token costs, and the coverage
    table.
-3. Repeat the same review — expect `CACHED REVIEW` with zero session spend.
+3. Repeat the same review; expect `CACHED REVIEW` with zero session spend.
 4. Dispatch an implementation task to `test-engineer`; confirm it lands a
    passing spec in `spec/` and confirm its local `delegate` tool offers only
    its enabled review targets (`delegate.reviews`).
-5. Ask a delegated specialist to dispatch a task — expect a refusal from the
+5. Ask a delegated specialist to dispatch a task; expect a refusal from the
    harness, not from a prompt; work outside its brief comes back as a flagged
    gap in its report.
-6. Run two identical reviews concurrently from two calls — expect one
+6. Run two identical reviews concurrently from two calls; expect one
    `JOINED IN-FLIGHT SESSION` result.
 7. Ask for a background review fan-out (`background = true`); confirm the
    receipt names a `bg-<n>` id and arrives immediately, the aggregate report
@@ -489,7 +490,7 @@ manual testing.
    (visible in its transcript); `action = "stop"` closes the live sessions
    and the original receipt's dispatch finishes with `cancelled` results,
    claims released. Confirm `maki -p` refuses `background = true` with a
-   clear error, and that a nested/implementation delegate sending
+   clear error, and that a nested or implementation delegate sending
    `background = true` is refused.
 9. Break a definition (introduce a syntax error, for example), `/reload`, and
    confirm maki logs a plugin-load error that names the file and the reason
@@ -508,6 +509,6 @@ manual testing.
     confirm the status bar shows the y/s/n hints, and that they clear on
     both an answer and the 55 s timeout.
 13. With `strict_claims = true`, dispatch two same-specialist task targets
-    with overlapping claims in one fan-out — expect neither a warning nor a
-    refusal — and confirm a foreground task still refuses against a
+    with overlapping claims in one fan-out; expect neither a warning nor a
+    refusal. Confirm a foreground task still refuses against a
     still-running background dispatch with overlapping claims.
