@@ -1434,7 +1434,7 @@ function M.handle_background(ctx, targets, invoker, cwd)
     return "error: " .. berr, true
   end
 
-  -- synchronous validation pass; refusals never reach the spawned run
+  -- synchronous validation pass; refusals never reach the moved run
   local peek = { used = 0 }
   local pending = {}
   local refused = {}
@@ -1463,7 +1463,7 @@ function M.handle_background(ctx, targets, invoker, cwd)
     target._dispatch = { id = disp_id, idx = idx }
   end
 
-  -- The spawned run starts its real budget count from the number of targets
+  -- The moved run starts its real budget count from the number of targets
   -- the validation pass refused, so every target counts exactly once across
   -- both passes (validate_background_target documents the deal).
   local run_call = { cwd = cwd, used = #refused }
@@ -1474,16 +1474,22 @@ function M.handle_background(ctx, targets, invoker, cwd)
   -- the model sees as this tool call's result.
   local receipt = Report.format_receipt(disp_id, targets, refused)
   local moved = false
-  local ok_hook = pcall(function()
+  local ok_hook, hook_err = pcall(function()
     ctx:on_background(function() return receipt end)
   end)
   if ok_hook then
-    local ok_move, move_res = pcall(function() return ctx:background() end)
-    moved = ok_move and move_res == true
+    local ok_move, moved_or_nil, move_err = pcall(function() return ctx:background() end)
+    moved = ok_move and moved_or_nil == true
     if not moved then
       warn_log("background dispatch " .. disp_id
-        .. " could not move its call (" .. tostring(move_res) .. "); running in the foreground")
+        .. " could not move its call ("
+        .. tostring(move_err or hook_err or moved_or_nil)
+        .. "); running in the foreground")
     end
+  else
+    warn_log("background dispatch " .. disp_id
+      .. " could not register its move hook (" .. tostring(hook_err)
+      .. "); running in the foreground")
   end
 
   -- Cancellation (stopped call, plugin unload) must not leave the registry
