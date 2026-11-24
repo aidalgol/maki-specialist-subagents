@@ -1406,9 +1406,19 @@ function M.handle_action(ctx, input, invoker)
 end
 
 -- `background = true`: validate synchronously (violations come back as
--- immediate tool errors), then move the fan-out plus the aggregation into a
--- single maki.async.spawn and return a receipt. The spawned task delivers
--- the aggregate report via maki.session.notify (wake = true).
+-- immediate tool errors), then move the delegate call itself to the
+-- background (`ctx:on_background` + `ctx:background`, the same mechanism the
+-- built-in task tool uses) and return a receipt from the move hook. The moved
+-- call's token does not fire with the receipt, so the specialist sessions
+-- opened under it outlive the tool reply, the fan-out runs in the handler,
+-- and the handler's return is delivered as the report message.
+--
+-- The previous arrangement (maki.async.spawn + maki.session.notify) cancelled
+-- every target the moment the receipt returned: a session opened under a
+-- model call is a child of that call's token, and the call token fires with
+-- the reply, so every prompt died at 0ms with "cancelled". When the move
+-- fails (background work off), the fan-out runs blocking in the foreground
+-- and the report returns in place, exactly like the built-in task tool.
 function M.handle_background(ctx, targets, invoker, cwd)
   local parent_session = session_id_of(ctx)
   -- Headless: no session id to wake with the results (e.g. under `maki -p`),
@@ -1424,7 +1434,7 @@ function M.handle_background(ctx, targets, invoker, cwd)
     return "error: " .. berr, true
   end
 
-  -- synchronous validation pass; refusals never reach the spawned run
+  -- synchronous validation pass; refusals never reach the moved run
   local peek = { used = 0 }
   local pending = {}
   local refused = {}
@@ -1453,100 +1463,95 @@ function M.handle_background(ctx, targets, invoker, cwd)
     target._dispatch = { id = disp_id, idx = idx }
   end
 
-  -- The spawned run starts its real budget count from the number of targets
+  -- The moved run starts its real budget count from the number of targets
   -- the validation pass refused, so every target counts exactly once across
   -- both passes (validate_background_target documents the deal).
   local run_call = { cwd = cwd, used = #refused }
-  local spawned_ok = pcall(function()
-    maki.async.spawn(function()
-      -- Cancellation (plugin unload, stopped task) must not leave the
-      -- registry entry behind: the aggregate would never be delivered, and
-      -- `action = "status"` would list this dispatch forever.
-      pcall(function()
-        maki.async.on_cancel(function()
-          M.running_pop(disp_id)
-          warn_log("background dispatch " .. disp_id .. " cancelled; its results were lost")
-        end)
-      end)
-      local ok, task_err = pcall(function()
-        local sem = maki.async.semaphore(Config.max_active)
-        local results = {}
-        local fns = {}
-        for idx, target in ipairs(pending) do
-          fns[#fns + 1] = function()
-            local permit = sem:acquire()
-            local ok_t, res = pcall(run_target, ctx, target, invoker, run_call)
-            permit:release()
-            if not ok_t then
-              res = {
-                specialist = tostring(target.specialist),
-                kind = target.kind,
-                status = "failed",
-                error = "pipeline error: " .. tostring(res),
-                warnings = {},
-              }
-              warn_log("pipeline error for " .. tostring(target.specialist) .. ": " .. tostring(res.error))
-            end
-            M.running_mark(disp_id, idx, res and res.status or "failed")
-            results[idx] = res
-          end
-        end
-        maki.async.gather(fns)
 
-        -- Aggregate over the dispatchable targets only; synchronous
-        -- refusals are appended below, they never ran a session.
-        local text = aggregate_text(cwd, pending, results)
-        if #refused > 0 then
-          local ref = Report.format_aggregate(refused)
-          text = text .. "\n\nRefused at validation (no session opened):\n" .. ref
-        end
-
-        local done = 0
-        for _, r in ipairs(results) do
-          if r and r.status == "done" then
-            done = done + 1
-          end
-        end
-        local _, nerr = maki.session.notify(text, {
-          session = parent_session,
-          wake = true,
-          display = "specialist-subagents: " .. disp_id .. " finished ("
-            .. done .. "/" .. #pending .. " completed)",
-        })
-        if nerr then
-          -- the session may have closed mid-run: one retry, then the report
-          -- is lost (warn at error level so it is findable in the log)
-          maki.async.sleep(1000)
-          local _, nerr2 = maki.session.notify(text, {
-            session = parent_session,
-            wake = true,
-            display = "specialist-subagents: " .. disp_id .. " finished",
-          })
-          if nerr2 then
-            pcall(function()
-              maki.log.error("specialist-subagents: background dispatch " .. disp_id
-                .. " completed but its aggregate report could not be delivered ("
-                .. tostring(nerr2) .. "); verdicts are in the review ledger")
-            end)
-          end
-        end
-      end)
-      M.running_pop(disp_id)
-      if not ok then
-        warn_log("background dispatch " .. disp_id .. " failed: " .. tostring(task_err))
-      end
-    end)
+  -- Move the delegate call itself to the background before any session
+  -- opens: a moved call's token does not fire with the receipt, so sessions
+  -- opened under it keep running past the reply. The hook's return is what
+  -- the model sees as this tool call's result.
+  local receipt = Report.format_receipt(disp_id, targets, refused)
+  local moved = false
+  local ok_hook, hook_err = pcall(function()
+    ctx:on_background(function() return receipt end)
   end)
-  if not spawned_ok then
-    M.running_pop(disp_id)
-    return "error: could not start the background dispatch task; dispatch synchronously", true
+  if ok_hook then
+    local ok_move, moved_or_nil, move_err = pcall(function() return ctx:background() end)
+    moved = ok_move and moved_or_nil == true
+    if not moved then
+      warn_log("background dispatch " .. disp_id
+        .. " could not move its call ("
+        .. tostring(move_err or hook_err or moved_or_nil)
+        .. "); running in the foreground")
+    end
+  else
+    warn_log("background dispatch " .. disp_id
+      .. " could not register its move hook (" .. tostring(hook_err)
+      .. "); running in the foreground")
   end
 
-  return Report.format_receipt(disp_id, targets, refused), false
-end
+  -- Cancellation (stopped call, plugin unload) must not leave the registry
+  -- entry behind: the aggregate would never be delivered, and
+  -- `action = "status"` would list this dispatch forever.
+  pcall(function()
+    maki.async.on_cancel(function()
+      M.running_pop(disp_id)
+      warn_log("background dispatch " .. disp_id .. " cancelled; its results were lost")
+    end)
+  end)
 
--- Shared pipeline for the registered tool and nested local tools.
--- Returns (llm_output_string, is_error).
+  -- Fan-out in the handler: for a moved call this runs after the model got
+  -- the receipt, and the return below is delivered as the report message.
+  -- Same shape as the synchronous path: gather (not join, whose workers die
+  -- at maki.async.run's 60-second cap) bounded by the semaphore.
+  local ok, task_err = pcall(function()
+    local sem = maki.async.semaphore(Config.max_active)
+    local results = {}
+    local fns = {}
+    for idx, target in ipairs(pending) do
+      fns[#fns + 1] = function()
+        local permit = sem:acquire()
+        local ok_t, res = pcall(run_target, ctx, target, invoker, run_call)
+        permit:release()
+        if not ok_t then
+          res = {
+            specialist = tostring(target.specialist),
+            kind = target.kind,
+            status = "failed",
+            error = "pipeline error: " .. tostring(res),
+            warnings = {},
+          }
+          warn_log("pipeline error for " .. tostring(target.specialist) .. ": " .. tostring(res.error))
+        end
+        M.running_mark(disp_id, idx, res and res.status or "failed")
+        results[idx] = res
+      end
+    end
+    maki.async.gather(fns)
+
+    -- Aggregate over the dispatchable targets only; synchronous
+    -- refusals are appended below, they never ran a session.
+    local text = aggregate_text(cwd, pending, results)
+    if #refused > 0 then
+      local ref = Report.format_aggregate(refused)
+      text = text .. "\n\nRefused at validation (no session opened):\n" .. ref
+    end
+    return text
+  end)
+  M.running_pop(disp_id)
+  if not ok then
+    warn_log("background dispatch " .. disp_id .. " failed: " .. tostring(task_err))
+    return "error: background dispatch " .. disp_id .. " failed: " .. tostring(task_err), true
+  end
+
+  local text = task_err
+  if not moved then
+    return "Could not start the background dispatch; ran in the foreground.\n\n" .. text, false
+  end
+  return text, false
+end
 function M.handle(ctx, input, invoker)
   invoker = invoker or { name = "main", chain = {} }
   if type(input) == "table" and input.action ~= nil then
